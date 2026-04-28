@@ -8,9 +8,27 @@
 
 import { create } from 'zustand';
 
+export type LayerType = 'drone' | 'texture' | 'pulse' | 'glitch' | 'breath';
+
+export const LAYER_TYPES: LayerType[] = [
+  'drone',
+  'texture',
+  'pulse',
+  'glitch',
+  'breath',
+];
+
 export type SessionEvent =
   | { t: number; type: 'descent_started' }
-  | { t: number; type: 'layer_placed'; layerId: string; freq: number; depth: number }
+  | {
+      t: number;
+      type: 'layer_placed';
+      layerId: string;
+      layerType: LayerType;
+      freq: number;
+      depth: number;
+      position: [number, number, number];
+    }
   | { t: number; type: 'layer_faded'; layerId: string; depth: number }
   | { t: number; type: 'agent_narrate'; text: string; mood: string; depth: number }
   | { t: number; type: 'spectral_snapshot'; bands: number[]; depth: number };
@@ -25,6 +43,7 @@ export type PendingEvent = SessionEvent extends infer E
 
 export interface PlacedLayer {
   id: string;
+  type: LayerType;
   freq: number;
   position: [number, number, number];
   bornAt: number;
@@ -40,12 +59,17 @@ interface SessionState {
   proxyOk: boolean | null;
   agentLine: string | null;
   startedAt: number | null;
+  selectedPreset: LayerType;
+  recording: boolean;
+
   begin: () => void;
   setDepth: (d: number) => void;
   setProxyOk: (ok: boolean) => void;
   addLayer: (layer: PlacedLayer) => void;
   setAgentLine: (line: string | null) => void;
   pushEvent: (e: PendingEvent) => void;
+  setSelectedPreset: (t: LayerType) => void;
+  setRecording: (r: boolean) => void;
 }
 
 export const useSession = create<SessionState>((set) => ({
@@ -56,6 +80,8 @@ export const useSession = create<SessionState>((set) => ({
   proxyOk: null,
   agentLine: null,
   startedAt: null,
+  selectedPreset: 'drone',
+  recording: false,
 
   begin: () =>
     set(() => ({
@@ -77,8 +103,10 @@ export const useSession = create<SessionState>((set) => ({
           t: relTime(s.startedAt),
           type: 'layer_placed',
           layerId: layer.id,
+          layerType: layer.type,
           freq: layer.freq,
           depth: s.depth,
+          position: layer.position,
         },
       ],
     })),
@@ -89,6 +117,9 @@ export const useSession = create<SessionState>((set) => ({
     set((s) => ({
       log: [...s.log, { ...e, t: relTime(s.startedAt) } as SessionEvent],
     })),
+
+  setSelectedPreset: (t) => set({ selectedPreset: t }),
+  setRecording: (r) => set({ recording: r }),
 }));
 
 function relTime(startedAt: number | null): number {

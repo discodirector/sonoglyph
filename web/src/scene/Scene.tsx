@@ -6,16 +6,17 @@ import {
   Noise,
 } from '@react-three/postprocessing';
 import { Fog } from 'three';
-import { useEffect, useMemo } from 'react';
+import type { Mesh } from 'three';
+import { useEffect, useMemo, useRef } from 'react';
 import { useSession } from '../state/useSession';
+import { setListenerPosition } from '../audio/engine';
 import { LayerOrb } from './Layer';
 
 /**
- * Drives the camera downward during the descent phase.
- * Pacing: ~6 minutes total descent → ~2.78 units/sec.
+ * Drives the camera downward during the descent phase and keeps the audio
+ * listener glued to it for spatial panning.
  *
- * Camera keeps its initial orientation (look slightly down-forward) for
- * the whole descent — the world drifts past as the camera falls.
+ * Pacing: ~6 minutes total descent → ~2.78 units/sec.
  */
 function DescentCamera() {
   const camera = useThree((s) => s.camera);
@@ -24,15 +25,17 @@ function DescentCamera() {
 
   useEffect(() => {
     camera.position.set(0, 0, 0);
-    // Look down-and-forward; this orientation is preserved as we drop.
     camera.lookAt(0, -8, -10);
   }, [camera]);
 
   useFrame((_, delta) => {
-    if (phase !== 'descent') return;
-    const speed = 1000 / (6 * 60);
-    camera.position.y -= speed * delta;
-    setDepth(Math.max(0, -camera.position.y));
+    if (phase === 'descent') {
+      const speed = 1000 / (6 * 60);
+      camera.position.y -= speed * delta;
+      setDepth(Math.max(0, -camera.position.y));
+    }
+    // Listener follows the camera so 3D-panned layers feel located in space.
+    setListenerPosition(camera.position.x, camera.position.y, camera.position.z);
   });
 
   return null;
@@ -47,11 +50,8 @@ function FogSetup() {
 }
 
 /**
- * Faint ambient markers — give the void a felt depth even before the
- * player has placed any layers. Static cloud of dim points scattered
- * along the descent corridor. They are not interactive and produce no
- * sound; they just keep the scene from looking empty during the first
- * seconds.
+ * Faint ambient markers — give the void a felt depth even before any layers
+ * are placed. Static cloud, no audio.
  */
 function DepthMarkers() {
   const points = useMemo(() => {
@@ -62,7 +62,7 @@ function DepthMarkers() {
       const radius = 3 + Math.random() * 14;
       const x = Math.cos(angle) * radius;
       const z = Math.sin(angle) * radius - 6;
-      const y = -(Math.random() * 1100); // spread across full descent
+      const y = -(Math.random() * 1100);
       arr.push([x, y, z]);
     }
     return arr;
@@ -84,8 +84,49 @@ function DepthMarkers() {
   );
 }
 
-export function Scene() {
+/**
+ * Invisible horizontal plane that follows ~18 units below the camera. Catches
+ * pointer clicks anywhere in the descent corridor and reports the world-space
+ * hit point so App can spawn a layer there. Depth-write disabled so it never
+ * occludes orbs visually.
+ */
+function PlacementPlane({
+  onPlace,
+}: {
+  onPlace: (point: [number, number, number]) => void;
+}) {
+  const ref = useRef<Mesh>(null);
+  const camera = useThree((s) => s.camera);
+
+  useFrame(() => {
+    if (!ref.current) return;
+    ref.current.position.x = camera.position.x;
+    ref.current.position.y = camera.position.y - 18;
+    ref.current.position.z = camera.position.z - 6;
+  });
+
+  return (
+    <mesh
+      ref={ref}
+      rotation={[-Math.PI / 2, 0, 0]}
+      onClick={(e) => {
+        e.stopPropagation();
+        onPlace([e.point.x, e.point.y, e.point.z]);
+      }}
+    >
+      <planeGeometry args={[240, 240]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+    </mesh>
+  );
+}
+
+export function Scene({
+  onPlace,
+}: {
+  onPlace: (point: [number, number, number]) => void;
+}) {
   const layers = useSession((s) => s.layers);
+  const phase = useSession((s) => s.phase);
 
   return (
     <Canvas
@@ -104,6 +145,8 @@ export function Scene() {
       {layers.map((l) => (
         <LayerOrb key={l.id} layer={l} />
       ))}
+
+      {phase === 'descent' && <PlacementPlane onPlace={onPlace} />}
 
       <EffectComposer>
         <Bloom

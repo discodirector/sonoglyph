@@ -1,17 +1,25 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Scene } from './scene/Scene';
 import { Hud } from './ui/Hud';
-import { useSession } from './state/useSession';
-import { addDroneLayer, initAudio, setGlobalDepth } from './audio/engine';
+import { LAYER_TYPES, useSession } from './state/useSession';
+import {
+  addLayer,
+  captureSpectrum,
+  initAudio,
+  setGlobalDepth,
+  startRecording,
+} from './audio/engine';
 
 /**
  * Sonoglyph root.
  *
- * Day 1 vertical slice:
+ * Day 2 vertical slice:
  *   - INTRO gate (audio context requires user gesture)
- *   - DESCENT phase: camera drifts down, "Place Layer" spawns a drone
- *   - Proxy /health ping on mount
- *   - Periodic stub call to /api/hermes/stream → narrate line in HUD
+ *   - Click anywhere in the descent → spawns selected preset at that point
+ *   - Keyboard 1-5 selects preset, palette in HUD reflects choice
+ *   - Spectrum snapshots every 5s into the session log
+ *   - Master recorder runs from begin() → blob retrievable later (Day 4 UI)
+ *   - Stub Hermes call every 30s → narrate line in HUD (Day 3 wires real one)
  */
 export function App() {
   const phase = useSession((s) => s.phase);
@@ -21,8 +29,13 @@ export function App() {
   const setAgentLine = useSession((s) => s.setAgentLine);
   const addLayerToState = useSession((s) => s.addLayer);
   const pushEvent = useSession((s) => s.pushEvent);
+  const setSelectedPreset = useSession((s) => s.setSelectedPreset);
+  const setRecording = useSession((s) => s.setRecording);
 
-  // Verify proxy is reachable on boot.
+  // Layer handles for future fade-out (Day 4 will wire arrival → fade).
+  const layerHandlesRef = useRef<Map<string, () => void>>(new Map());
+
+  // Health check on mount.
   useEffect(() => {
     fetch('/health')
       .then((r) => r.json())
@@ -30,12 +43,39 @@ export function App() {
       .catch(() => setProxyOk(false));
   }, [setProxyOk]);
 
-  // Mirror global depth into the audio engine.
+  // Mirror global depth into the audio engine (depth → reverb send).
   useEffect(() => {
     setGlobalDepth(depth);
   }, [depth]);
 
-  // Periodically nudge the agent (stub Day 1).
+  // Keyboard 1-5 selects preset.
+  useEffect(() => {
+    if (phase !== 'descent') return;
+    const onKey = (e: KeyboardEvent) => {
+      const idx = parseInt(e.key, 10) - 1;
+      if (idx >= 0 && idx < LAYER_TYPES.length) {
+        setSelectedPreset(LAYER_TYPES[idx]);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [phase, setSelectedPreset]);
+
+  // Spectral snapshots every 5s — feeds Kimi journal + glyph generation.
+  useEffect(() => {
+    if (phase !== 'descent') return;
+    const interval = window.setInterval(() => {
+      const bands = captureSpectrum();
+      pushEvent({
+        type: 'spectral_snapshot',
+        bands,
+        depth: useSession.getState().depth,
+      });
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [phase, pushEvent]);
+
+  // Stub Hermes call every 30s (Day 3 swaps for real streaming + tool use).
   useEffect(() => {
     if (phase !== 'descent') return;
 
@@ -74,17 +114,16 @@ export function App() {
                   window.setTimeout(() => setAgentLine(null), 9000);
                 }
               } catch {
-                /* ignore malformed */
+                /* malformed — ignore */
               }
             }
           }
         }
       } catch {
-        /* network / proxy down — silent on Day 1 */
+        /* network down — silent */
       }
     };
 
-    // Fire once shortly after begin, then every 30s.
     const initial = window.setTimeout(tick, 4000);
     const interval = window.setInterval(tick, 30000);
     return () => {
@@ -95,38 +134,35 @@ export function App() {
   }, [phase, setAgentLine, pushEvent]);
 
   /**
-   * Place a layer in a forward-down cone relative to the camera so the
-   * descending camera approaches it gradually (~5-7s of visibility).
-   * The camera looks ~39° below horizon, so orbs sit below + forward.
+   * Place a layer at a world-space point. Reads the currently selected preset
+   * from the store so keyboard/palette changes apply immediately.
    */
-  const placeLayerAtCurrentDepth = (currentDepth: number) => {
-    const handle = addDroneLayer();
-    const angle = Math.random() * Math.PI * 2;
-    const radius = 2 + Math.random() * 3.5;
-    const xOffset = Math.cos(angle) * radius;
-    const zOffset = -(8 + Math.random() * 8) + Math.sin(angle) * 1.5;
-    const yOffset = -(currentDepth + 13 + Math.random() * 8);
+  const handlePlace = (point: [number, number, number]) => {
+    const type = useSession.getState().selectedPreset;
+    const handle = addLayer(type, point);
+    layerHandlesRef.current.set(handle.id, handle.dispose);
     addLayerToState({
       id: handle.id,
+      type,
       freq: handle.freq,
-      position: [xOffset, yOffset, zOffset],
+      position: point,
       bornAt: Date.now(),
     });
   };
 
   const handleBegin = async () => {
     await initAudio();
-    placeLayerAtCurrentDepth(0); // seed bed, visible from descent start
-    begin();
-  };
-
-  const handlePlace = () => {
-    placeLayerAtCurrentDepth(depth);
+    startRecording();
+    setRecording(true);
+    begin(); // sets phase, startedAt, fresh log
+    // Seed a layer in front-and-below so the descent isn't silent.
+    // Default selectedPreset is 'drone'.
+    handlePlace([0, -16, -10]);
   };
 
   return (
     <>
-      <Scene />
+      <Scene onPlace={handlePlace} />
       {phase === 'intro' ? (
         <div
           style={{
@@ -139,6 +175,7 @@ export function App() {
             gap: 28,
             textAlign: 'center',
             padding: 32,
+            pointerEvents: 'auto',
           }}
         >
           <h1 style={{ letterSpacing: '0.45em', fontWeight: 300, fontSize: 30, margin: 0 }}>
@@ -150,7 +187,7 @@ export function App() {
           <button onClick={handleBegin}>Begin descent</button>
         </div>
       ) : (
-        <Hud onPlace={handlePlace} />
+        <Hud />
       )}
     </>
   );
