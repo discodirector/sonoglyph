@@ -1,0 +1,52 @@
+/* Sonoglyph — global styles. Black void, no scrollbars, mono UI. */
+
+:root {
+  color-scheme: dark;
+  --bg: #050507;
+  --fg: #d8d4cf;
+  --dim: #6a6660;
+  --accent: #8aa1b3;
+  --warn: #c97a5b;
+  font-family: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular,
+    Menlo, Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  overflow: hidden;
+  user-select: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--fg);
+  padding: 0.6em 1.2em;
+  cursor: pointer;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+button:hover {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+a {
+  color: var(--accent);
+}

@@ -1,0 +1,43 @@
+# deps
+node_modules/
+**/node_modules/
+
+# env — никогда не коммитим
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+
+# build
+dist/
+build/
+.vite/
+**/dist/
+**/build/
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# os
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
+
+# foundry (на день 5)
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# session captures (промежуточные записи аудио для отладки)
+captures/
+*.webm
+*.wav
+
+# claude
+.claude/settings.local.json
