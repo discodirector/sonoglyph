@@ -29,7 +29,7 @@ function DescentCamera() {
   }, [camera]);
 
   useFrame((_, delta) => {
-    if (phase === 'descent') {
+    if (phase === 'playing') {
       const speed = 1000 / (6 * 60);
       camera.position.y -= speed * delta;
       setDepth(Math.max(0, -camera.position.y));
@@ -146,7 +146,7 @@ export function Scene({
         <LayerOrb key={l.id} layer={l} />
       ))}
 
-      {phase === 'descent' && <PlacementPlane onPlace={onPlace} />}
+      {phase === 'playing' && <PlacementPlane onPlace={onPlace} />}
 
       <EffectComposer>
         <Bloom

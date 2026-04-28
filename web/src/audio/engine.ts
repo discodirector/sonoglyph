@@ -247,10 +247,31 @@ interface PresetBuild {
 
 const FREQS_LOW = [55, 61.74, 65.41, 73.42, 82.41, 87.31];
 const FREQS_MID = [110, 130.81, 146.83, 164.81, 196];
-const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
-function buildDrone(): PresetBuild {
-  const freq = pick(FREQS_LOW);
+/**
+ * Pick a representative frequency for a preset. Exported so the client can
+ * decide a frequency BEFORE sending to the bridge — the bridge stores it,
+ * broadcasts it back, and the engine plays the layer with the agreed freq.
+ * For presets that don't use pitched oscillators (texture/glitch/breath)
+ * the value is symbolic — it's used by the visual layer for breathe-rate
+ * and by the agent context for descriptive purposes.
+ */
+export function pickFreqForType(type: LayerType): number {
+  switch (type) {
+    case 'drone':
+      return FREQS_LOW[Math.floor(Math.random() * FREQS_LOW.length)];
+    case 'pulse':
+      return FREQS_MID[Math.floor(Math.random() * FREQS_MID.length)];
+    case 'texture':
+      return 800;
+    case 'glitch':
+      return 1500;
+    case 'breath':
+      return 730;
+  }
+}
+
+function buildDrone(freq: number): PresetBuild {
   const detune = (Math.random() - 0.5) * 14;
   const osc = new Tone.Oscillator({ frequency: freq, type: 'sawtooth', detune });
   const sub = new Tone.Oscillator({ frequency: freq / 2, type: 'sine' });
@@ -292,9 +313,9 @@ function buildDrone(): PresetBuild {
   };
 }
 
-function buildTexture(): PresetBuild {
+function buildTexture(freq: number): PresetBuild {
   const noise = new Tone.Noise('pink');
-  const bp = new Tone.Filter({ frequency: 800, type: 'bandpass', Q: 4 });
+  const bp = new Tone.Filter({ frequency: freq, type: 'bandpass', Q: 4 });
   const gain = new Tone.Gain(0);
   noise.connect(bp);
   bp.connect(gain);
@@ -312,7 +333,7 @@ function buildTexture(): PresetBuild {
 
   return {
     output: gain,
-    freq: 800, // representative
+    freq,
     dispose: () => {
       gain.gain.rampTo(0, 2.5);
       window.setTimeout(() => {
@@ -329,8 +350,7 @@ function buildTexture(): PresetBuild {
   };
 }
 
-function buildPulse(): PresetBuild {
-  const freq = pick(FREQS_MID);
+function buildPulse(freq: number): PresetBuild {
   const osc = new Tone.Oscillator({ frequency: freq, type: 'triangle' });
   const env = new Tone.AmplitudeEnvelope({
     attack: 1.6,
@@ -367,10 +387,10 @@ function buildPulse(): PresetBuild {
   };
 }
 
-function buildGlitch(): PresetBuild {
+function buildGlitch(freq: number): PresetBuild {
   const noise = new Tone.Noise('white');
   const bp = new Tone.Filter({
-    frequency: 1500,
+    frequency: freq,
     type: 'bandpass',
     Q: 8,
   });
@@ -391,7 +411,7 @@ function buildGlitch(): PresetBuild {
 
   return {
     output: gain,
-    freq: 1500,
+    freq,
     dispose: () => {
       loop.stop().dispose();
       window.setTimeout(() => {
@@ -407,7 +427,7 @@ function buildGlitch(): PresetBuild {
   };
 }
 
-function buildBreath(): PresetBuild {
+function buildBreath(freq: number): PresetBuild {
   const noise = new Tone.Noise('pink');
   // 'a'-vowel formant approximation — sounds like a hushed /aaa/.
   const formants = [
@@ -444,7 +464,7 @@ function buildBreath(): PresetBuild {
 
   return {
     output: out,
-    freq: 730,
+    freq,
     dispose: () => {
       loop.stop().dispose();
       out.gain.rampTo(0, 2);
@@ -463,18 +483,18 @@ function buildBreath(): PresetBuild {
   };
 }
 
-function buildPreset(type: LayerType): PresetBuild {
+function buildPreset(type: LayerType, freq: number): PresetBuild {
   switch (type) {
     case 'drone':
-      return buildDrone();
+      return buildDrone(freq);
     case 'texture':
-      return buildTexture();
+      return buildTexture(freq);
     case 'pulse':
-      return buildPulse();
+      return buildPulse(freq);
     case 'glitch':
-      return buildGlitch();
+      return buildGlitch(freq);
     case 'breath':
-      return buildBreath();
+      return buildBreath(freq);
   }
 }
 
@@ -482,14 +502,23 @@ function buildPreset(type: LayerType): PresetBuild {
 // Public layer API.
 // -----------------------------------------------------------------------------
 
+/**
+ * Play a layer. The freq is provided externally so the bridge stays
+ * authoritative — the client picks freq via pickFreqForType, sends it to
+ * the bridge, the bridge stores + broadcasts it back, and we play with the
+ * agreed value. The optional `id` is used to attach the layer to a server-
+ * generated PlacedLayer so visuals + audio share an identity.
+ */
 export function addLayer(
   type: LayerType,
   position: [number, number, number],
+  freq: number,
+  id?: string,
 ): LayerHandle {
   if (!initialized) throw new Error('audio engine not initialized');
 
-  const id = crypto.randomUUID();
-  const preset = buildPreset(type);
+  const layerId = id ?? crypto.randomUUID();
+  const preset = buildPreset(type, freq);
 
   const panner = new Tone.Panner3D({
     positionX: position[0],
@@ -506,7 +535,7 @@ export function addLayer(
   panner.connect(reverbSend);
 
   return {
-    id,
+    id: layerId,
     type,
     freq: preset.freq,
     dispose: () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Scene } from './scene/Scene';
 import { Hud } from './ui/Hud';
 import { LAYER_TYPES, useSession } from './state/useSession';
@@ -6,41 +6,41 @@ import {
   addLayer,
   captureSpectrum,
   initAudio,
+  pickFreqForType,
   setGlobalDepth,
   startRecording,
 } from './audio/engine';
-import { runAgentTurn } from './agent/voiceLoop';
+import { openBridge, type BridgeConnection } from './net/client';
 
 /**
  * Sonoglyph root.
  *
- * Day 3:
- *   - Real Hermes voice loop with TTS playback (graceful fallback to stub
- *     and silent line if .env keys missing).
- *   - Voice ducks layer audio while playing.
- *   - Periodic turn every 28s + debounced turn 4s after each layer placement,
- *     gated by 15s hard cooldown.
+ * Day 4 architecture:
+ *   - Bridge (Node + WS) is the authority for layers, turns, cooldowns.
+ *   - Browser opens WS on Begin, sends place_layer, receives layer_added
+ *     for both its own placements and the agent's, plays each via the
+ *     audio engine.
+ *   - Stub agent in bridge auto-places after a short think delay during
+ *     the cooldown window. Day 5 swaps stub for Hermes via MCP.
  */
 export function App() {
   const phase = useSession((s) => s.phase);
   const depth = useSession((s) => s.depth);
-  const begin = useSession((s) => s.begin);
+  const beginLocal = useSession((s) => s.beginLocal);
   const setProxyOk = useSession((s) => s.setProxyOk);
-  const setAgentLine = useSession((s) => s.setAgentLine);
-  const addLayerToState = useSession((s) => s.addLayer);
-  const pushEvent = useSession((s) => s.pushEvent);
-  const setSelectedPreset = useSession((s) => s.setSelectedPreset);
   const setRecording = useSession((s) => s.setRecording);
-  const layerCount = useSession((s) => s.layers.length);
+  const setSelectedPreset = useSession((s) => s.setSelectedPreset);
+  const pushEvent = useSession((s) => s.pushEvent);
+  const applySnapshot = useSession((s) => s.applySnapshot);
+  const applyLayerAdded = useSession((s) => s.applyLayerAdded);
+  const applyTurnChanged = useSession((s) => s.applyTurnChanged);
+  const applyAgentThinking = useSession((s) => s.applyAgentThinking);
+  const applyFinished = useSession((s) => s.applyFinished);
 
-  // Layer handles for future fade-out (Day 4 will wire arrival → fade).
+  const bridgeRef = useRef<BridgeConnection | null>(null);
   const layerHandlesRef = useRef<Map<string, () => void>>(new Map());
 
-  // Voice loop state.
-  const lastNarrateAtRef = useRef<number>(0);
-  const turnBusyRef = useRef(false);
-
-  // Health check on mount.
+  // Health check (proxy reachability indicator).
   useEffect(() => {
     fetch('/health')
       .then((r) => r.json())
@@ -48,14 +48,14 @@ export function App() {
       .catch(() => setProxyOk(false));
   }, [setProxyOk]);
 
-  // Mirror global depth into the audio engine.
+  // Mirror depth into audio engine (drives reverb wetness).
   useEffect(() => {
     setGlobalDepth(depth);
   }, [depth]);
 
-  // Keyboard 1-5 selects preset.
+  // Keyboard 1-5 selects preset (only when it's player's turn).
   useEffect(() => {
-    if (phase !== 'descent') return;
+    if (phase !== 'playing') return;
     const onKey = (e: KeyboardEvent) => {
       const idx = parseInt(e.key, 10) - 1;
       if (idx >= 0 && idx < LAYER_TYPES.length) {
@@ -68,7 +68,7 @@ export function App() {
 
   // Spectral snapshots every 5s — feeds Kimi journal + glyph generation.
   useEffect(() => {
-    if (phase !== 'descent') return;
+    if (phase !== 'playing') return;
     const interval = window.setInterval(() => {
       const bands = captureSpectrum();
       pushEvent({
@@ -81,73 +81,79 @@ export function App() {
   }, [phase, pushEvent]);
 
   // ---------------------------------------------------------------------------
-  // Voice loop
+  // Bridge connection — WS messages dispatched into the store + audio engine.
   // ---------------------------------------------------------------------------
-  const tryAgentTurn = useCallback(async () => {
-    if (turnBusyRef.current) return;
-    if (Date.now() - lastNarrateAtRef.current < 15000) return; // hard cooldown
+  const openBridgeConnection = () => {
+    if (bridgeRef.current && bridgeRef.current.isOpen()) return;
 
-    turnBusyRef.current = true;
-    try {
-      await runAgentTurn({
-        onNarrate: (text, mood) => {
-          setAgentLine(text);
-          pushEvent({
-            type: 'agent_narrate',
-            text,
-            mood,
-            depth: useSession.getState().depth,
-          });
-          lastNarrateAtRef.current = Date.now();
-          window.setTimeout(() => setAgentLine(null), 9000);
-        },
-        onSuggest: (layerType, reason) => {
-          pushEvent({
-            type: 'agent_suggest',
-            layerType,
-            reason,
-            depth: useSession.getState().depth,
-          });
-        },
-      });
-    } finally {
-      turnBusyRef.current = false;
-    }
-  }, [setAgentLine, pushEvent]);
+    const conn = openBridge((msg) => {
+      switch (msg.type) {
+        case 'state':
+          applySnapshot(msg.state);
+          // Replay any layers that already exist (handles reconnects).
+          for (const layer of msg.state.layers) {
+            if (!layerHandlesRef.current.has(layer.id)) {
+              const handle = addLayer(
+                layer.type,
+                layer.position,
+                layer.freq,
+                layer.id,
+              );
+              layerHandlesRef.current.set(layer.id, handle.dispose);
+            }
+          }
+          return;
+        case 'layer_added': {
+          applyLayerAdded(msg.layer);
+          // Spawn audio for this layer (skip if already known — defensive
+          // against stray duplicates).
+          if (!layerHandlesRef.current.has(msg.layer.id)) {
+            const handle = addLayer(
+              msg.layer.type,
+              msg.layer.position,
+              msg.layer.freq,
+              msg.layer.id,
+            );
+            layerHandlesRef.current.set(msg.layer.id, handle.dispose);
+          }
+          return;
+        }
+        case 'turn_changed':
+          applyTurnChanged(msg.currentTurn, msg.cooldownEndsAt, msg.turnCount);
+          return;
+        case 'agent_thinking':
+          applyAgentThinking();
+          return;
+        case 'finished':
+          applyFinished();
+          return;
+        case 'error':
+          console.warn('[bridge]', msg.message);
+          return;
+      }
+    });
 
-  // Periodic + opening turn.
-  useEffect(() => {
-    if (phase !== 'descent') return;
-    const initial = window.setTimeout(tryAgentTurn, 5000);
-    const interval = window.setInterval(tryAgentTurn, 28000);
-    return () => {
-      window.clearTimeout(initial);
-      window.clearInterval(interval);
-    };
-  }, [phase, tryAgentTurn]);
+    bridgeRef.current = conn;
+  };
 
-  // Triggered turn shortly after each layer placement (cooldown still applies).
-  useEffect(() => {
-    if (phase !== 'descent') return;
-    if (layerCount === 0) return;
-    const t = window.setTimeout(tryAgentTurn, 4000);
-    return () => window.clearTimeout(t);
-  }, [phase, layerCount, tryAgentTurn]);
-
-  /**
-   * Place a layer at a world-space point. Reads the currently selected preset
-   * from the store so keyboard/palette changes apply immediately.
-   */
+  // ---------------------------------------------------------------------------
+  // Player turn handler — only valid when game state allows it. Server
+  // validates again, this is just to avoid useless WS chatter.
+  // ---------------------------------------------------------------------------
   const handlePlace = (point: [number, number, number]) => {
-    const type = useSession.getState().selectedPreset;
-    const handle = addLayer(type, point);
-    layerHandlesRef.current.set(handle.id, handle.dispose);
-    addLayerToState({
-      id: handle.id,
-      type,
-      freq: handle.freq,
+    const s = useSession.getState();
+    if (s.phase !== 'playing') return;
+    if (s.currentTurn !== 'player') return;
+    if (s.cooldownEndsAt && Date.now() < s.cooldownEndsAt) return;
+    if (s.layers.length >= s.maxLayers) return;
+
+    const type = s.selectedPreset;
+    const freq = pickFreqForType(type);
+    bridgeRef.current?.send({
+      type: 'place_layer',
+      layerType: type,
       position: point,
-      bornAt: Date.now(),
+      freq,
     });
   };
 
@@ -155,9 +161,8 @@ export function App() {
     await initAudio();
     startRecording();
     setRecording(true);
-    begin(); // sets phase, startedAt, fresh log
-    // Seed a layer in front-and-below so the descent isn't silent.
-    handlePlace([0, -16, -10]);
+    beginLocal();
+    openBridgeConnection();
   };
 
   return (
@@ -182,7 +187,8 @@ export function App() {
             SONOGLYPH
           </h1>
           <p style={{ maxWidth: 480, color: '#a09d99', fontStyle: 'italic', margin: 0 }}>
-            A descent. Place tones into the dark and the stone will remember.
+            A descent. Place tones into the dark and the stone will remember —
+            but you do not descend alone.
           </p>
           <button onClick={handleBegin}>Begin descent</button>
         </div>
