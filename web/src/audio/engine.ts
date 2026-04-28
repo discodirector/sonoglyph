@@ -1,13 +1,22 @@
 /**
- * Audio engine v2 — Tone.js master + 5 layer presets + 3D panning + capture.
+ * Audio engine — Tone.js master + 5 layer presets + 3D panning + voice ducking.
  *
- * Signal chain (per layer):
- *   preset → Panner3D → master  (dry)
- *                     → reverbSend → reverb → master  (wet, depth-driven)
+ * Signal graph:
  *
- * Master also feeds:
- *   - Tone.Recorder  (records full descent → WebM blob for NFT + video)
- *   - Tone.Analyser  (FFT, used to push spectral_snapshot events into the log)
+ *   per-layer preset → Panner3D ─┬─→ master (Limiter)
+ *                                └─→ reverbSend → reverb → master
+ *                                                              │
+ *   master ──────────────────────────────────► analyser (pre-voice, layers only)
+ *      │
+ *      ▼
+ *   masterDuck (Gain — ramped down during voice playback)
+ *      │
+ *      ▼
+ *   masterMix (Gain) ───┬─→ destination
+ *                       └─→ recorder (full mix incl. voice)
+ *      ▲
+ *      │
+ *   voiceGain ◄─── Web Audio MediaElementSource (TTS playback)
  *
  * Listener (Web Audio AudioListener) is updated each frame from the R3F
  * camera so panning tracks the descent.
@@ -22,6 +31,9 @@ import type { LayerType } from '../state/useSession';
 
 let initialized = false;
 let master: Tone.Limiter;
+let masterDuck: Tone.Gain;
+let masterMix: Tone.Gain;
+let voiceGain: Tone.Gain;
 let reverb: Tone.Reverb;
 let reverbSend: Tone.Gain;
 let analyzer: Tone.Analyser;
@@ -32,7 +44,19 @@ export async function initAudio(): Promise<void> {
   await Tone.start();
 
   Tone.getDestination().volume.value = -6;
-  master = new Tone.Limiter(-1).toDestination();
+
+  // Final summing point — feeds destination + recorder.
+  masterMix = new Tone.Gain(1).toDestination();
+
+  // Layers route: master → masterDuck → masterMix
+  master = new Tone.Limiter(-1);
+  masterDuck = new Tone.Gain(1);
+  master.connect(masterDuck);
+  masterDuck.connect(masterMix);
+
+  // Voice route: voiceGain → masterMix (bypasses duck)
+  voiceGain = new Tone.Gain(1.4);
+  voiceGain.connect(masterMix);
 
   reverb = new Tone.Reverb({ decay: 16, wet: 1 });
   await reverb.generate();
@@ -42,7 +66,7 @@ export async function initAudio(): Promise<void> {
   reverbSend.connect(reverb);
 
   analyzer = new Tone.Analyser('fft', 64);
-  master.connect(analyzer);
+  master.connect(analyzer); // pre-duck, pre-voice — measures layers only
 
   // Loops + scheduled envelopes need the Transport running.
   Tone.getTransport().start();
@@ -84,6 +108,79 @@ export function setGlobalDepth(depth: number): void {
 }
 
 // -----------------------------------------------------------------------------
+// Voice playback + sidechain ducking.
+//
+// Voice arrives as an audio Blob (mp3 from ElevenLabs). We route it through
+// Web Audio so we can keep timing-tight ducking on the layers.
+// -----------------------------------------------------------------------------
+
+const DUCK_TARGET = 0.32;
+
+function duckLayers(): void {
+  if (!initialized) return;
+  masterDuck.gain.cancelScheduledValues(Tone.now());
+  masterDuck.gain.rampTo(DUCK_TARGET, 0.25);
+}
+
+function unduckLayers(): void {
+  if (!initialized) return;
+  masterDuck.gain.cancelScheduledValues(Tone.now());
+  masterDuck.gain.rampTo(1, 0.55);
+}
+
+/**
+ * Play a voice blob, ducking layers for its duration. Resolves when playback
+ * finishes (or fails). Safe to call before audio engine is initialized — in
+ * that case it logs and resolves immediately.
+ */
+export function playVoice(blob: Blob): Promise<void> {
+  if (!initialized) {
+    console.warn('[engine] playVoice called before init');
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => {
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.crossOrigin = 'anonymous';
+    audio.preload = 'auto';
+
+    const rawCtx = Tone.getContext().rawContext as unknown as AudioContext;
+    let source: MediaElementAudioSourceNode | null = null;
+    try {
+      source = rawCtx.createMediaElementSource(audio);
+      // Bridge raw Web Audio source into Tone graph.
+      Tone.connect(source, voiceGain);
+    } catch (err) {
+      console.error('[engine] failed to route voice through Web Audio', err);
+      URL.revokeObjectURL(url);
+      resolve();
+      return;
+    }
+
+    const cleanup = () => {
+      try {
+        source?.disconnect();
+      } catch {
+        /* ignore */
+      }
+      URL.revokeObjectURL(url);
+      unduckLayers();
+      resolve();
+    };
+
+    audio.addEventListener('ended', cleanup, { once: true });
+    audio.addEventListener('error', cleanup, { once: true });
+
+    duckLayers();
+    audio.play().catch((err) => {
+      console.error('[engine] audio.play rejected', err);
+      cleanup();
+    });
+  });
+}
+
+// -----------------------------------------------------------------------------
 // Spectral capture — used by App's interval to log spectral_snapshot events.
 // Returns 8 bands (low → high), each averaged over a chunk of the FFT bins.
 // Values are in dBFS (negative); we normalize roughly to 0..1 for storage.
@@ -114,7 +211,9 @@ export function captureSpectrum(): number[] {
 export function startRecording(): void {
   if (!initialized || recorder) return;
   recorder = new Tone.Recorder();
-  master.connect(recorder);
+  // Tap the FINAL mix so the recording captures voice + ducked layers
+  // exactly as the user heard them.
+  masterMix.connect(recorder);
   recorder.start();
 }
 

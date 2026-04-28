@@ -31,6 +31,13 @@ export type SessionEvent =
     }
   | { t: number; type: 'layer_faded'; layerId: string; depth: number }
   | { t: number; type: 'agent_narrate'; text: string; mood: string; depth: number }
+  | {
+      t: number;
+      type: 'agent_suggest';
+      layerType: LayerType;
+      reason: string;
+      depth: number;
+    }
   | { t: number; type: 'spectral_snapshot'; bands: number[]; depth: number };
 
 // Distributive Omit so each union member keeps its own discriminator/fields.

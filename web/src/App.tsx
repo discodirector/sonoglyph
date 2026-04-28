@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Scene } from './scene/Scene';
 import { Hud } from './ui/Hud';
 import { LAYER_TYPES, useSession } from './state/useSession';
@@ -9,17 +9,17 @@ import {
   setGlobalDepth,
   startRecording,
 } from './audio/engine';
+import { runAgentTurn } from './agent/voiceLoop';
 
 /**
  * Sonoglyph root.
  *
- * Day 2 vertical slice:
- *   - INTRO gate (audio context requires user gesture)
- *   - Click anywhere in the descent → spawns selected preset at that point
- *   - Keyboard 1-5 selects preset, palette in HUD reflects choice
- *   - Spectrum snapshots every 5s into the session log
- *   - Master recorder runs from begin() → blob retrievable later (Day 4 UI)
- *   - Stub Hermes call every 30s → narrate line in HUD (Day 3 wires real one)
+ * Day 3:
+ *   - Real Hermes voice loop with TTS playback (graceful fallback to stub
+ *     and silent line if .env keys missing).
+ *   - Voice ducks layer audio while playing.
+ *   - Periodic turn every 28s + debounced turn 4s after each layer placement,
+ *     gated by 15s hard cooldown.
  */
 export function App() {
   const phase = useSession((s) => s.phase);
@@ -31,9 +31,14 @@ export function App() {
   const pushEvent = useSession((s) => s.pushEvent);
   const setSelectedPreset = useSession((s) => s.setSelectedPreset);
   const setRecording = useSession((s) => s.setRecording);
+  const layerCount = useSession((s) => s.layers.length);
 
   // Layer handles for future fade-out (Day 4 will wire arrival → fade).
   const layerHandlesRef = useRef<Map<string, () => void>>(new Map());
+
+  // Voice loop state.
+  const lastNarrateAtRef = useRef<number>(0);
+  const turnBusyRef = useRef(false);
 
   // Health check on mount.
   useEffect(() => {
@@ -43,7 +48,7 @@ export function App() {
       .catch(() => setProxyOk(false));
   }, [setProxyOk]);
 
-  // Mirror global depth into the audio engine (depth → reverb send).
+  // Mirror global depth into the audio engine.
   useEffect(() => {
     setGlobalDepth(depth);
   }, [depth]);
@@ -75,63 +80,59 @@ export function App() {
     return () => window.clearInterval(interval);
   }, [phase, pushEvent]);
 
-  // Stub Hermes call every 30s (Day 3 swaps for real streaming + tool use).
+  // ---------------------------------------------------------------------------
+  // Voice loop
+  // ---------------------------------------------------------------------------
+  const tryAgentTurn = useCallback(async () => {
+    if (turnBusyRef.current) return;
+    if (Date.now() - lastNarrateAtRef.current < 15000) return; // hard cooldown
+
+    turnBusyRef.current = true;
+    try {
+      await runAgentTurn({
+        onNarrate: (text, mood) => {
+          setAgentLine(text);
+          pushEvent({
+            type: 'agent_narrate',
+            text,
+            mood,
+            depth: useSession.getState().depth,
+          });
+          lastNarrateAtRef.current = Date.now();
+          window.setTimeout(() => setAgentLine(null), 9000);
+        },
+        onSuggest: (layerType, reason) => {
+          pushEvent({
+            type: 'agent_suggest',
+            layerType,
+            reason,
+            depth: useSession.getState().depth,
+          });
+        },
+      });
+    } finally {
+      turnBusyRef.current = false;
+    }
+  }, [setAgentLine, pushEvent]);
+
+  // Periodic + opening turn.
   useEffect(() => {
     if (phase !== 'descent') return;
-
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const res = await fetch('/api/hermes/stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ depth: useSession.getState().depth }),
-        });
-        if (!res.body) return;
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = '';
-        while (!cancelled) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const events = buf.split('\n\n');
-          buf = events.pop() ?? '';
-          for (const evt of events) {
-            const eventLine = evt.match(/event: (\w+)/)?.[1];
-            const dataLine = evt.match(/data: (.+)/)?.[1];
-            if (eventLine === 'tool_call' && dataLine) {
-              try {
-                const tool = JSON.parse(dataLine);
-                if (tool?.name === 'narrate' && tool.arguments?.text) {
-                  setAgentLine(tool.arguments.text);
-                  pushEvent({
-                    type: 'agent_narrate',
-                    text: tool.arguments.text,
-                    mood: tool.arguments.mood ?? 'calm',
-                    depth: useSession.getState().depth,
-                  });
-                  window.setTimeout(() => setAgentLine(null), 9000);
-                }
-              } catch {
-                /* malformed — ignore */
-              }
-            }
-          }
-        }
-      } catch {
-        /* network down — silent */
-      }
-    };
-
-    const initial = window.setTimeout(tick, 4000);
-    const interval = window.setInterval(tick, 30000);
+    const initial = window.setTimeout(tryAgentTurn, 5000);
+    const interval = window.setInterval(tryAgentTurn, 28000);
     return () => {
-      cancelled = true;
       window.clearTimeout(initial);
       window.clearInterval(interval);
     };
-  }, [phase, setAgentLine, pushEvent]);
+  }, [phase, tryAgentTurn]);
+
+  // Triggered turn shortly after each layer placement (cooldown still applies).
+  useEffect(() => {
+    if (phase !== 'descent') return;
+    if (layerCount === 0) return;
+    const t = window.setTimeout(tryAgentTurn, 4000);
+    return () => window.clearTimeout(t);
+  }, [phase, layerCount, tryAgentTurn]);
 
   /**
    * Place a layer at a world-space point. Reads the currently selected preset
@@ -156,7 +157,6 @@ export function App() {
     setRecording(true);
     begin(); // sets phase, startedAt, fresh log
     // Seed a layer in front-and-below so the descent isn't silent.
-    // Default selectedPreset is 'drone'.
     handlePlace([0, -16, -10]);
   };
 
