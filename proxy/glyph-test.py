@@ -9,45 +9,55 @@ import os
 import sys
 import urllib.request
 
-# A realistic 15-layer game, alternating Player / Hermes (player goes first).
+# Realistic drone-heavy game roughly matching what the user just played:
+# 8x drone (dominant) + texture pulses + a glitch fracture + closing texture.
 LAYERS = [
     ("Player",  "drone",   None),
-    ("Hermes",  "texture", "silver gathering at the edges"),
-    ("Player",  "breath",  None),
-    ("Hermes",  "drone",   "a low floor descends, almost subterranean"),
-    ("Player",  "pulse",   None),
-    ("Hermes",  "breath",  "a throat opens between the beats"),
+    ("Hermes",  "texture", "pale hiss"),
     ("Player",  "drone",   None),
-    ("Hermes",  "glitch",  "a small fracture in the rhythm shadow"),
-    ("Player",  "drone",   None),
-    ("Hermes",  "breath",  "the cave inhales with us"),
-    ("Player",  "drone",   None),
-    ("Hermes",  "pulse",   "two clocks answer; ground hums beneath"),
-    ("Player",  "drone",   None),
-    ("Hermes",  "drone",   "settling like sediment at the deep"),
+    ("Hermes",  "pulse",   "a faint clock starts in the wall"),
+    ("Player",  "glitch",  None),
+    ("Hermes",  "drone",   "deeper blue gravity"),
     ("Player",  "texture", None),
+    ("Hermes",  "texture", "electric dust"),
+    ("Player",  "drone",   None),
+    ("Hermes",  "pulse",   "the clock catches"),
+    ("Player",  "drone",   None),
+    ("Hermes",  "drone",   "low water rising"),
+    ("Player",  "glitch",  None),
+    ("Hermes",  "drone",   "last floor"),
+    ("Player",  "drone",   None),
 ]
 
-HEAVY = {"drone", "pulse", "glitch"}
+TYPE_GLYPHS = {
+    "drone": ["#", "|", "="],
+    "pulse": ["+", "="],
+    "glitch": ["/", "\\", "*"],
+    "texture": [".", "-"],
+    "breath": ["-", "=", "<", ">"],
+}
 
 
-def build_density_map(layers, n_bands=5, n_rows=16):
-    bands = []
+def build_band_palettes(layers, n_bands=5, n_rows=16):
+    out = []
     for b in range(n_bands):
         start = (b * len(layers)) // n_bands
         end = ((b + 1) * len(layers)) // n_bands
         sl = layers[start:end]
         sr = (b * n_rows) // n_bands
         er = ((b + 1) * n_rows) // n_bands - 1
-        h = sum(1 for _, t, _ in sl if t in HEAVY)
-        ratio = 0 if not sl else h / len(sl)
-        dens = "dense" if ratio >= 0.66 else "medium" if ratio >= 0.34 else "sparse"
         types = [t for _, t, _ in sl]
-        bands.append((b + 1, f"rows {sr}-{er}", dens, types))
-    return "\n".join(
-        f"- band {i} ({rng:<10}): {d:<6} — {', '.join(types)}"
-        for i, rng, d, types in bands
-    )
+        palette = []
+        for t in types:
+            for ch in TYPE_GLYPHS[t]:
+                if ch not in palette:
+                    palette.append(ch)
+        types_str = (", ".join(types)) or "(empty)"
+        rng = f"rows {sr}-{er}"
+        out.append(
+            f"- band {b+1} ({rng:<10}): {types_str:<28} → use: {' '.join(palette)}"
+        )
+    return "\n".join(out)
 
 
 def build_poetic(layers):
@@ -67,41 +77,83 @@ def build_transcript(layers):
 
 
 def build_prompt(layers):
-    density_map = build_density_map(layers)
+    band_palettes = build_band_palettes(layers)
     poetic = build_poetic(layers)
     transcript = build_transcript(layers)
 
-    return density_map, poetic, "\n".join([
+    return band_palettes, poetic, "\n".join([
         "You are an Autoglyphs-style generative artist. Output an ASCII glyph",
         "that visually condenses the descent below.",
         "",
-        "Constraints — follow exactly:",
-        "- Exactly 32 columns wide, exactly 16 rows tall.",
-        "- Use only these characters: space, .  -  =  +  *  #  /  \\  |  <  >",
-        "- No letters, no numbers, no other punctuation.",
-        "- Each row must NOT be a copy of another row — vary the form.",
-        "- Each of the 16 rows must reflect the density level for its band",
-        "  (see map below). Don't keep one density throughout.",
+        "OUTPUT FORMAT — exactly this and nothing else:",
+        "  line 1: 32 dashes (--------------------------------)",
+        "  lines 2-17: the 16 rows of the glyph (each row up to 32 chars)",
+        "  line 18: 32 dashes (--------------------------------)",
+        "No header, no explanation, no markdown, no code fence, no closing",
+        "remarks. The opening and closing separator MUST use dashes (-);",
+        "do NOT substitute = or # for the boundary lines.",
         "",
-        "Output ONLY the glyph between two lines of exactly 32 dashes (`-`).",
-        "No explanation, no header, no commentary, no fenced code block.",
+        "CHARACTER SET (rows only): space  .  -  =  +  *  #  /  \\  |  <  >",
+        "No letters, no numbers, no other punctuation inside the glyph.",
         "",
-        "How to read the inputs:",
-        "- The DENSITY MAP binds each band of glyph rows to a density level",
-        '  ("sparse" / "medium" / "dense"). "dense" → mostly thick chars',
-        "  (#, *, +, |, =); \"sparse\" → mostly spaces and dots; \"medium\" is",
-        "  in between.",
-        "- The POETIC INTENT is what Hermes felt while placing each layer.",
-        "  Let those images bend the local form (breath → soft, glitch →",
-        "  jagged, drone → solid, pulse → rhythmic).",
+        "COMPOSITION RULES — mandatory, the result must satisfy ALL:",
+        "1. Produce ALL 16 rows. Do not stop early. Every row must contain",
+        "   at least one non-space character — no blank rows.",
+        "2. Every row is UNIQUE. No two rows may share the same pattern, and",
+        "   no row may be a tiling of one repeating segment (like",
+        "   \"####|####|####|\") — that reads as wallpaper, not a glyph.",
+        "3. The glyph must visibly EVOLVE from top to bottom. Top rows are",
+        "   the surface (start of descent), bottom rows are the deep end.",
+        "   Character weight, rhythm, and the use of empty space should",
+        "   shift as you descend — not stay constant.",
+        "4. Each of the 5 bands has its OWN character palette computed from",
+        "   the layers placed in that band (see BAND PALETTES below). Draw",
+        "   each band mostly from its palette so bands feel distinct.",
+        "5. Some rows can be airy (a few marks among spaces), others can be",
+        "   denser. Mix them to create breathing room and weight.",
         "",
-        "Density map (top → bottom):",
-        density_map,
+        "NEGATIVE EXAMPLES — do NOT produce output that looks like these:",
         "",
-        "Hermes's poetic reactions (in placement order):",
+        "  Bad (one tiled segment across the whole image):",
+        "    ####|####|####|####|####|####|##",
+        "    ####|####|####|####|####|####|##",
+        "    ####|####|####|####|####|####|##",
+        "",
+        "  Bad (one alternation repeated for nearly every row):",
+        "    =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-",
+        "    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=",
+        "    =.=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-",
+        "",
+        "POSITIVE EXAMPLE — varied silhouette, breathing, evolving downward",
+        "(do NOT copy these characters; invent your own composition):",
+        "",
+        "       .   .                ",
+        "     . . +   .              ",
+        "      ..++.    .            ",
+        "     ++/\\++.   /+           ",
+        "   /+++/+\\*+++/+\\           ",
+        "   <><>../+++/+-+-+-+        ",
+        "  +++/+\\*=##|##|=#           ",
+        "  ##| ==== ##|##| ====       ",
+        "   ##|##|##|====   ===       ",
+        "    -- = - = - = - =         ",
+        "     . - = .  -  =           ",
+        "      .   |   .              ",
+        "       . . .                 ",
+        "         .                   ",
+        "         |                   ",
+        "         .                   ",
+        "",
+        "BAND PALETTES (top → bottom of the glyph):",
+        band_palettes,
+        "",
+        "POETIC INTENT — Hermes's reactions while placing each layer. Let",
+        "these images bend local shape: breath/exhale → soft (., -, =);",
+        "glitch/fracture → jagged (/, \\, *); drone/floor → solid (#, |);",
+        "pulse/clock → rhythmic (+, =); texture/dust → scattered (., -):",
         poetic,
         "",
-        "Full placement log (for reference):",
+        "Full placement log (reference only — band palettes already encode it):",
         transcript,
     ])
 
@@ -148,9 +200,17 @@ def main():
     print(normalize_glyph(text))
 
 
+ALLOWED_GLYPH = set(" .-=+*#/\\|<>")
+
+
+def sanitize_chars(s: str) -> str:
+    return "".join(ch if ch in ALLOWED_GLYPH else " " for ch in s)
+
+
 def normalize_row(raw: str, width: int = 32) -> str:
     """Mirror of extractGlyph's normalizeRow in proxy/src/kimi.ts."""
-    trimmed = raw.rstrip()
+    cleaned = sanitize_chars(raw)
+    trimmed = cleaned.rstrip()
     if not trimmed:
         return " " * width
     if len(trimmed) == width:
@@ -176,10 +236,10 @@ def normalize_glyph(raw: str) -> str:
     if m:
         text = m.group(1)
     lines = text.split("\n")
-    dash_re = _re.compile(r"^-{20,}$")
+    boundary_re = _re.compile(r"^([\-=#*+/\\|.~])\1{19,}$")
     start = end = -1
     for i, line in enumerate(lines):
-        if dash_re.match(line.strip()):
+        if boundary_re.match(line.strip()):
             if start < 0:
                 start = i
             else:
@@ -189,7 +249,16 @@ def normalize_glyph(raw: str) -> str:
         block = lines[start + 1:end]
     else:
         allowed = _re.compile(r"^[ .\-=+*#/\\|<>]+$")
-        block = [l for l in lines if len(l) >= 8 and allowed.match(l)]
+        def keep(l):
+            t = l.strip()
+            if len(t) < 6:
+                return False
+            if not allowed.match(l):
+                return False
+            if len(t) >= 16 and len(set(t)) == 1:
+                return False
+            return True
+        block = [l for l in lines if keep(l)]
     block = [normalize_row(l, 32) for l in block[:16]]
     while len(block) < 16:
         block.append(" " * 32)

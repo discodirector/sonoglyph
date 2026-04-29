@@ -45,7 +45,7 @@ export async function generateFinalArtifact(
   }
 
   const transcript = formatTranscript(layers);
-  const densityMap = buildDensityMap(layers);
+  const bandPalettes = buildBandPalettes(layers);
   const poeticIntent = buildPoeticIntent(layers);
 
   try {
@@ -53,7 +53,7 @@ export async function generateFinalArtifact(
       callKimi(apiKey, journalPrompt(transcript), 600),
       callKimi(
         apiKey,
-        glyphPrompt(transcript, densityMap, poeticIntent),
+        glyphPrompt(transcript, bandPalettes, poeticIntent),
         1000,
       ),
     ]);
@@ -160,40 +160,82 @@ function journalPrompt(transcript: string): string {
 
 function glyphPrompt(
   transcript: string,
-  densityMap: string,
+  bandPalettes: string,
   poeticIntent: string,
 ): string {
   return [
     'You are an Autoglyphs-style generative artist. Output an ASCII glyph',
     'that visually condenses the descent below.',
     '',
-    'Constraints — follow exactly:',
-    '- Exactly 32 columns wide, exactly 16 rows tall.',
-    '- Use only these characters: space, .  -  =  +  *  #  /  \\  |  <  >',
-    '- No letters, no numbers, no other punctuation.',
-    '- Each row must NOT be a copy of another row — vary the form.',
-    '- Each of the 16 rows must reflect the density level for its band',
-    "  (see map below). Don't keep one density throughout.",
+    'OUTPUT FORMAT — exactly this and nothing else:',
+    '  line 1: 32 dashes (--------------------------------)',
+    '  lines 2-17: the 16 rows of the glyph (each row up to 32 chars)',
+    '  line 18: 32 dashes (--------------------------------)',
+    'No header, no explanation, no markdown, no code fence, no closing',
+    'remarks. The opening and closing separator MUST use dashes (-);',
+    'do NOT substitute = or # for the boundary lines.',
     '',
-    'Output ONLY the glyph between two lines of exactly 32 dashes (`-`).',
-    'No explanation, no header, no commentary, no fenced code block.',
+    'CHARACTER SET (rows only): space  .  -  =  +  *  #  /  \\  |  <  >',
+    'No letters, no numbers, no other punctuation inside the glyph.',
     '',
-    'How to read the inputs:',
-    '- The DENSITY MAP binds each band of glyph rows to a density level',
-    '  ("sparse" / "medium" / "dense"). "dense" → mostly thick chars',
-    '  (#, *, +, |, =); "sparse" → mostly spaces and dots; "medium" is',
-    '  in between.',
-    '- The POETIC INTENT is what Hermes felt while placing each layer.',
-    '  Let those images bend the local form (breath → soft, glitch →',
-    '  jagged, drone → solid, pulse → rhythmic).',
+    'COMPOSITION RULES — mandatory, the result must satisfy ALL:',
+    '1. Produce ALL 16 rows. Do not stop early. Every row must contain',
+    '   at least one non-space character — no blank rows.',
+    '2. Every row is UNIQUE. No two rows may share the same pattern, and',
+    '   no row may be a tiling of one repeating segment (like',
+    '   "####|####|####|") — that reads as wallpaper, not a glyph.',
+    '3. The glyph must visibly EVOLVE from top to bottom. Top rows are',
+    '   the surface (start of descent), bottom rows are the deep end.',
+    '   Character weight, rhythm, and the use of empty space should',
+    '   shift as you descend — not stay constant.',
+    '4. Each of the 5 bands has its OWN character palette computed from',
+    '   the layers placed in that band (see BAND PALETTES below). Draw',
+    '   each band mostly from its palette so bands feel distinct.',
+    '5. Some rows can be airy (a few marks among spaces), others can be',
+    '   denser. Mix them to create breathing room and weight.',
     '',
-    'Density map (top → bottom):',
-    densityMap,
+    'NEGATIVE EXAMPLES — do NOT produce output that looks like these:',
     '',
-    "Hermes's poetic reactions (in placement order):",
+    '  Bad (one tiled segment across the whole image):',
+    '    ####|####|####|####|####|####|##',
+    '    ####|####|####|####|####|####|##',
+    '    ####|####|####|####|####|####|##',
+    '',
+    '  Bad (one alternation repeated for nearly every row):',
+    '    =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-',
+    '    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=',
+    '    =.=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-',
+    '',
+    'POSITIVE EXAMPLE — varied silhouette, breathing, evolving downward',
+    '(do NOT copy these characters; invent your own composition):',
+    '',
+    '       .   .                ',
+    '     . . +   .              ',
+    '      ..++.    .            ',
+    '     ++/\\++.   /+           ',
+    '   /+++/+\\*+++/+\\           ',
+    '   <><>../+++/+-+-+-+        ',
+    '  +++/+\\*=##|##|=#           ',
+    '  ##| ==== ##|##| ====       ',
+    '   ##|##|##|====   ===       ',
+    '    -- = - = - = - =         ',
+    '     . - = .  -  =           ',
+    '      .   |   .              ',
+    '       . . .                 ',
+    '         .                   ',
+    '         |                   ',
+    '         .                   ',
+    '',
+    'BAND PALETTES (top → bottom of the glyph):',
+    bandPalettes,
+    '',
+    "POETIC INTENT — Hermes's reactions while placing each layer. Let",
+    'these images bend local shape: breath/exhale → soft (., -, =);',
+    'glitch/fracture → jagged (/, \\, *); drone/floor → solid (#, |);',
+    'pulse/clock → rhythmic (+, =); texture/dust → scattered (., -):',
     poeticIntent,
     '',
-    'Full placement log (for reference):',
+    'Full placement log (reference only — band palettes already encode it):',
     transcript,
   ].join('\n');
 }
@@ -201,65 +243,91 @@ function glyphPrompt(
 // ---------------------------------------------------------------------------
 // Glyph context builders.
 //
-// Both functions exist so the model gets STRUCTURED hints separated from the
-// raw transcript. The glyph prompt is a 16-row visual format; the density
-// map binds each band of rows to an actual property of the partition (count
-// of "loud" types per slice). The poetic-intent block lifts Hermes's quotes
-// out of the transcript so the model treats them as form-shaping images
-// rather than journal filler.
+// Two structured hints sit alongside the raw transcript in the glyph prompt:
+//
+//   1. BAND PALETTES — the descent is split into 5 vertical bands of the
+//      glyph (top → bottom). Each band gets a CHARACTER PALETTE derived
+//      from the layer types that fell into it. The palette tells the
+//      model which symbols to draw from for that band; because layer
+//      mixes differ between bands, the palettes differ too. This pushes
+//      the model toward visual variation across rows even when our older
+//      sparse/medium/dense classification flattened to the same label.
+//
+//   2. POETIC INTENT — Hermes's per-layer comments lifted out of the
+//      transcript and listed with their move number. The model treats
+//      these as form-shaping images (breath → soft, glitch → jagged, …).
 // ---------------------------------------------------------------------------
 
-// Layer types whose timbre tends to feel heavy on the page; the rest
-// (texture, breath) read as breath / mist / silence.
-const HEAVY_TYPES: ReadonlySet<LayerType> = new Set(['drone', 'pulse', 'glitch']);
+// Per-type character palettes. Listed roughly in order of "weight":
+//   drone   — sustained low: solid uprights and bars
+//   pulse   — rhythm: equals signs, plus signs (clock-like)
+//   glitch  — fracture: diagonals and asterisks
+//   texture — atmospheric: dots and short dashes
+//   breath  — exhalation: long dashes, soft curves, equals
+const TYPE_GLYPHS: Record<LayerType, string[]> = {
+  drone: ['#', '|', '='],
+  pulse: ['+', '='],
+  glitch: ['/', '\\', '*'],
+  texture: ['.', '-'],
+  breath: ['-', '=', '<', '>'],
+};
 
-interface DensityBand {
+interface Band {
   index: number;          // 1..N, top → bottom
   rowRange: string;       // e.g. "rows 0-2"
-  density: 'sparse' | 'medium' | 'dense';
   types: LayerType[];     // types in this slice, in placement order
 }
 
 /**
- * Slice the descent into `nBands` vertical bands and label each one with a
- * density category and its constituent types. Layers split into bands by
- * placement order — the first 3 are the top of the glyph, the last 3 are
- * the bottom. The density category is the ratio of "heavy" types
- * (drone/pulse/glitch) to the slice size.
+ * Slice the descent into `nBands` vertical bands. Layers are split by
+ * placement order — the first chunk maps to the top of the glyph, the
+ * last to the bottom. With 15 layers and 5 bands each band gets 3 layers;
+ * with 16 rows the bands cover row ranges 0-2, 3-5, 6-9, 10-12, 13-15.
  */
 function computeBands(
   layers: PlacedLayer[],
   nBands = 5,
   nRows = 16,
-): DensityBand[] {
-  const bands: DensityBand[] = [];
+): Band[] {
+  const bands: Band[] = [];
   for (let b = 0; b < nBands; b++) {
     const startIdx = Math.floor((b * layers.length) / nBands);
     const endIdx = Math.floor(((b + 1) * layers.length) / nBands);
     const slice = layers.slice(startIdx, endIdx);
     const startRow = Math.floor((b * nRows) / nBands);
     const endRow = Math.floor(((b + 1) * nRows) / nBands) - 1;
-    const heavy = slice.filter((l) => HEAVY_TYPES.has(l.type)).length;
-    const ratio = slice.length === 0 ? 0 : heavy / slice.length;
-    const density: DensityBand['density'] =
-      ratio >= 0.66 ? 'dense' : ratio >= 0.34 ? 'medium' : 'sparse';
     bands.push({
       index: b + 1,
       rowRange: `rows ${startRow}-${endRow}`,
-      density,
       types: slice.map((l) => l.type),
     });
   }
   return bands;
 }
 
-function buildDensityMap(layers: PlacedLayer[]): string {
+/**
+ * For each band, render a one-line hint: "rows 3-5  drone, pulse, breath
+ *   → use:  # | + = -". Palette is the union of TYPE_GLYPHS for the band's
+ * types, deduplicated, in a stable order. Spaces are not added to the
+ * palette explicitly — they're always allowed; the negative-space rule
+ * is enforced separately in the prompt's COMPOSITION RULES.
+ */
+function buildBandPalettes(layers: PlacedLayer[]): string {
   return computeBands(layers)
-    .map(
-      (b) =>
+    .map((b) => {
+      // Preserve order: walk types in placement order, accumulate unique chars.
+      const palette: string[] = [];
+      for (const t of b.types) {
+        for (const ch of TYPE_GLYPHS[t]) {
+          if (!palette.includes(ch)) palette.push(ch);
+        }
+      }
+      const types = b.types.join(', ') || '(empty)';
+      return (
         `- band ${b.index} (${b.rowRange.padEnd(10)}): ` +
-        `${b.density.padEnd(6)} — ${b.types.join(', ') || '(empty)'}`,
-    )
+        `${types.padEnd(28)} → use: ${palette.join(' ')}`
+      );
+    })
     .join('\n');
 }
 
@@ -286,11 +354,15 @@ function buildPoeticIntent(layers: PlacedLayer[]): string {
 function extractGlyph(raw: string): string {
   const text = stripFences(raw);
   const lines = text.split(/\r?\n/);
-  const dashRe = /^-{20,}$/;
+  // Boundary detection: any line ≥20 chars made of a single repeated
+  // non-space symbol counts. We ask for dashes in the prompt, but models
+  // sometimes substitute = or # for the closing rule, and rejecting those
+  // would leave us in best-effort and pull garbage.
+  const boundaryRe = /^([\-=#*+/\\|.~])\1{19,}$/;
   let start = -1;
   let end = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (dashRe.test(lines[i].trim())) {
+    if (boundaryRe.test(lines[i].trim())) {
       if (start < 0) start = i;
       else {
         end = i;
@@ -302,9 +374,19 @@ function extractGlyph(raw: string): string {
   if (start >= 0 && end > start) {
     block = lines.slice(start + 1, end);
   } else {
-    // Best-effort: keep lines made mostly of allowed glyph chars.
+    // Best-effort: keep lines made mostly of allowed glyph chars, but
+    // reject decorative all-one-character lines (separators that crept
+    // through without proper boundary detection).
     const allowed = /^[ .\-=+*#/\\|<>]+$/;
-    block = lines.filter((l) => l.length >= 8 && allowed.test(l));
+    block = lines.filter((l) => {
+      const trimmed = l.trim();
+      if (trimmed.length < 6) return false;
+      if (!allowed.test(l)) return false;
+      // All-one-char lines: drop if long (likely separator) — short ones
+      // can be legit (e.g. a row of just dots).
+      if (trimmed.length >= 16 && new Set(trimmed).size === 1) return false;
+      return true;
+    });
   }
   block = block.slice(0, 16).map((l) => normalizeRow(l, 32));
   while (block.length < 16) block.push(' '.repeat(32));
@@ -326,8 +408,18 @@ function extractGlyph(raw: string): string {
  *     the position with the most non-space characters. That preserves
  *     the densest part of the row instead of always starting at column 0.
  */
+// Allowed glyph characters; anything else gets replaced by space.
+const ALLOWED_GLYPH_CHARS = new Set(' .-=+*#/\\|<>'.split(''));
+
+function sanitizeChars(s: string): string {
+  let out = '';
+  for (const ch of s) out += ALLOWED_GLYPH_CHARS.has(ch) ? ch : ' ';
+  return out;
+}
+
 function normalizeRow(raw: string, width: number): string {
-  const trimmed = raw.replace(/\s+$/, '');
+  const cleaned = sanitizeChars(raw);
+  const trimmed = cleaned.replace(/\s+$/, '');
   if (trimmed.length === 0) return ' '.repeat(width);
   if (trimmed.length === width) return trimmed;
   if (trimmed.length < width) {
