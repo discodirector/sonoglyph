@@ -123,7 +123,9 @@ wss.on('connection', (ws: WSConn) => {
     "Stop only when wait_for_my_turn returns finished=true. " +
     "Do not emit text between tool calls. " +
     "Layer types: drone (low foundation), texture (airy noise), pulse (rhythm), " +
-    "glitch (brief disturbance), breath (vocal exhalation). " +
+    "glitch (brief disturbance), breath (vocal exhalation), bell (resonant " +
+    "struck tone with long decay), drip (sparse single pings), swell (slow " +
+    "filtered wave), chord (harmonic pad). Vary your choices across the descent. " +
     "Comment is one evocative line under 80 chars reacting to the music so far.";
   const hermesAddCommand = `hermes mcp add sonoglyph --url '${mcpUrl}'`;
   // One-liner: register MCP, then open INTERACTIVE chat. Player pastes the

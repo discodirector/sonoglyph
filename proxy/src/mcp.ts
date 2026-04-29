@@ -23,7 +23,8 @@
  *   place_layer(type, comment)
  *     → places the agent's layer. Bridge auto-positions. `comment` is shown
  *       to the player as the agent's reaction (capped at 200 chars). Type
- *       is one of: drone | texture | pulse | glitch | breath.
+ *       is one of: drone | texture | pulse | glitch | breath | bell |
+ *       drip | swell | chord.
  *
  * Hermes' loop (the player invokes this once via `hermes chat -q "..."`):
  *
@@ -133,7 +134,10 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
         '(<80 chars) reacting to the music so far. Stop when the game ' +
         'finishes. Available types: drone (low foundation), texture (airy ' +
         'noise), pulse (rhythm), glitch (brief disturbance), breath (vocal ' +
-        'exhalation).',
+        'exhalation), bell (resonant struck tone with long decay), drip ' +
+        '(sparse single tonal pings), swell (slow filtered wave), chord ' +
+        '(harmonic pad — root + fifth + octave). Vary your choices; the ' +
+        'composition gets richer when you don\'t repeat the same type.',
     },
   );
 
@@ -206,7 +210,7 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
         "it's shown to the player as your reaction.",
       inputSchema: {
         type: layerTypeSchema.describe(
-          'drone | texture | pulse | glitch | breath',
+          'drone | texture | pulse | glitch | breath | bell | drip | swell | chord',
         ),
         comment: z
           .string()

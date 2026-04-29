@@ -36,6 +36,18 @@ const FREQS_BY_TYPE: Record<LayerType, number[]> = {
   pulse: [110, 130.81, 146.83, 164.81, 196],
   glitch: [1500],
   breath: [730],
+  // Day 6 expansion — four new presets that fill gaps in the palette:
+  // resonance (bell), single events (drip), waves (swell), harmony (chord).
+  // Bell: A4–A5 natural pitches so successive bells form a recognizable
+  // pentatonic-ish set instead of arbitrary intervals.
+  bell: [440, 523.25, 587.33, 659.25, 783.99, 880],
+  // Drip: high tonal pings — the freq drives the pitch of the percussive tail.
+  drip: [800, 1000, 1200],
+  // Swell: filter centre frequency for a noise-bed wave; values picked to sit
+  // in the mid spectrum so swells feel "approaching" rather than melodic.
+  swell: [600, 700, 820],
+  // Chord: root note. Engine builds 5th + octave on top automatically.
+  chord: [110, 130.81, 146.83, 164.81, 196],
 };
 
 type Listener = (msg: ServerMessage) => void;

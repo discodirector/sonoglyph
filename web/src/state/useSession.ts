@@ -34,6 +34,10 @@ export const LAYER_TYPES: LayerType[] = [
   'pulse',
   'glitch',
   'breath',
+  'bell',
+  'drip',
+  'swell',
+  'chord',
 ];
 
 // ---------------------------------------------------------------------------

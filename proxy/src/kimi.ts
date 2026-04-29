@@ -193,7 +193,7 @@ function glyphPrompt(
     'remarks. The opening and closing separator MUST use dashes (-);',
     'do NOT substitute = or # for the boundary lines.',
     '',
-    'CHARACTER SET (rows only): space  .  -  =  +  *  #  /  \\  |  <  >',
+    'CHARACTER SET (rows only): space  .  -  =  +  *  #  /  \\  |  <  >  :  ~',
     'No letters, no numbers, no other punctuation inside the glyph.',
     '',
     'COMPOSITION RULES — mandatory, the result must satisfy ALL:',
@@ -256,7 +256,10 @@ function glyphPrompt(
     "POETIC INTENT — Hermes's reactions while placing each layer. Let",
     'these images bend local shape: breath/exhale → soft (., -, =);',
     'glitch/fracture → jagged (/, \\, *); drone/floor → solid (#, |);',
-    'pulse/clock → rhythmic (+, =); texture/dust → scattered (., -):',
+    'pulse/clock → rhythmic (+, =); texture/dust → scattered (., -);',
+    'bell/strike → bright punctuation (*, <, >); drip/water → isolated',
+    'marks (., :); swell/wave → curving (~, -, =); chord/halo → vertical',
+    'stack (|, =, :):',
     poeticIntent,
     '',
     'Full placement log (reference only — band palettes already encode it):',
@@ -288,12 +291,20 @@ function glyphPrompt(
 //   glitch  — fracture: diagonals and asterisks
 //   texture — atmospheric: dots and short dashes
 //   breath  — exhalation: long dashes, soft curves, equals
+//   bell    — resonant strike: stars and asymmetric markers
+//   drip    — single events: dots and stacked colons
+//   swell   — slow wave: tilde curves and equals signs
+//   chord   — harmonic stack: vertical bars + equals + colons
 const TYPE_GLYPHS: Record<LayerType, string[]> = {
   drone: ['#', '|', '='],
   pulse: ['+', '='],
   glitch: ['/', '\\', '*'],
   texture: ['.', '-'],
   breath: ['-', '=', '<', '>'],
+  bell: ['*', '<', '>'],
+  drip: ['.', ':'],
+  swell: ['~', '-', '='],
+  chord: ['|', '=', ':'],
 };
 
 interface Band {
@@ -525,7 +536,7 @@ function extractGlyph(raw: string): string {
     // Best-effort: keep lines made mostly of allowed glyph chars, but
     // reject decorative all-one-character lines (separators that crept
     // through without proper boundary detection).
-    const allowed = /^[ .\-=+*#/\\|<>]+$/;
+    const allowed = /^[ .\-=+*#/\\|<>:~]+$/;
     block = lines.filter((l) => {
       const trimmed = l.trim();
       if (trimmed.length < 6) return false;
@@ -557,7 +568,8 @@ function extractGlyph(raw: string): string {
  *     the densest part of the row instead of always starting at column 0.
  */
 // Allowed glyph characters; anything else gets replaced by space.
-const ALLOWED_GLYPH_CHARS = new Set(' .-=+*#/\\|<>'.split(''));
+// Day 6: added `:` (drip stacks, chord stack) and `~` (swell waves).
+const ALLOWED_GLYPH_CHARS = new Set(' .-=+*#/\\|<>:~'.split(''));
 
 function sanitizeChars(s: string): string {
   let out = '';
@@ -652,4 +664,8 @@ const GLYPH_CHARS: Record<string, string> = {
   pulse: '+',
   glitch: '/',
   breath: '-',
+  bell: '*',
+  drip: ':',
+  swell: '~',
+  chord: '|',
 };

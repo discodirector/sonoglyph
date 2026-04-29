@@ -138,7 +138,8 @@ export function Hud() {
             marginTop: 10,
             display: 'flex',
             justifyContent: 'center',
-            gap: 8,
+            gap: 6,
+            flexWrap: 'wrap',
           }}
         >
           {LAYER_TYPES.map((t, i) => (
@@ -164,7 +165,7 @@ export function Hud() {
               color: '#6a6660',
             }}
           >
-            CLICK INTO THE DARK TO PLACE A LAYER · KEYS 1-5 SELECT PRESET
+            CLICK INTO THE DARK TO PLACE A LAYER · KEYS 1-9 SELECT PRESET
           </div>
         )}
       </div>
@@ -229,6 +230,12 @@ const presetColors: Record<LayerType, string> = {
   pulse: '#c9885b',
   glitch: '#7be0d4',
   breath: '#d4a098',
+  // Day 6 expansion — colors match the orb emissives in scene/Layer.tsx
+  // so the floating "HERMES CHOSE <type>" notice and the orb agree visually.
+  bell: '#e8c97a',
+  drip: '#7eb6d6',
+  swell: '#9f7eb8',
+  chord: '#d4c8a8',
 };
 
 function PresetButton({
@@ -254,8 +261,8 @@ function PresetButton({
         flexDirection: 'column',
         alignItems: 'center',
         gap: 6,
-        padding: '10px 14px',
-        minWidth: 86,
+        padding: '8px 10px',
+        minWidth: 72,
         background: active && !disabled ? color : 'transparent',
         color: active && !disabled ? '#050507' : disabled ? '#3a3a3e' : '#d8d4cf',
         border: `1px solid ${active && !disabled ? color : disabled ? '#222' : '#3a3a3e'}`,
