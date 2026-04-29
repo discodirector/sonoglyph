@@ -1,20 +1,25 @@
 /**
  * Session store — single source of truth for the descent (frontend side).
  *
- * Authority split:
+ * Authority split (Day 5):
  *   - Server (bridge) is authoritative for: layers, turnCount, currentTurn,
- *     cooldownEndsAt, agentBusy, game phase. Updates flow in via WS messages.
- *   - Client owns: depth (camera), selectedPreset, proxyOk, recording,
- *     agentComment (transient UI), local event log (FFT snapshots, etc).
+ *     cooldownEndsAt, agentConnected, game phase. Updates flow in via WS.
+ *   - Server also delivers the pairing code, the MCP URL, and the
+ *     copy-paste hermes command on connect.
+ *   - Client owns: depth (camera), selectedPreset, recording, local event
+ *     log (FFT snapshots, etc).
  *
- * The local `log` exists for downstream artifacts (Kimi journal + ASCII glyph)
- * and contains things the server doesn't track — spectral snapshots, the
- * camera's continuous descent.
+ * Phase machine (browser-side):
+ *   'intro'    — before Begin: nothing happening, audio silent. Waiting for
+ *                Hermes pairing before Begin is enabled.
+ *   'playing'  — game running.
+ *   'finished' — 35 layers reached; HUD pivots to journal + glyph.
  */
 
 import { create } from 'zustand';
 import {
   type CurrentTurn,
+  type FinalArtifact,
   type GameStateSnapshot,
   type LayerType,
   type PlacedLayer,
@@ -32,7 +37,8 @@ export const LAYER_TYPES: LayerType[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Local event log — feeds Kimi field journal + glyph generation later.
+// Local event log — feeds spectral context for the journal in case we
+// later want to send richer prompts to Kimi from the client.
 // ---------------------------------------------------------------------------
 export type SessionEvent =
   | { t: number; type: 'descent_started' }
@@ -47,23 +53,21 @@ export type SessionEvent =
       position: [number, number, number];
       comment?: string;
     }
-  | { t: number; type: 'agent_comment'; comment: string; depth: number }
   | { t: number; type: 'spectral_snapshot'; bands: number[]; depth: number };
 
-// Distributive Omit so each union member keeps its discriminator/fields.
 export type PendingEvent = SessionEvent extends infer E
   ? E extends SessionEvent
     ? Omit<E, 't'>
     : never
   : never;
 
-// ---------------------------------------------------------------------------
-// Phase machine (browser-side)
-//   'intro'    — before Begin: nothing is happening, audio is silent.
-//   'playing'  — game running (mirrored from server).
-//   'finished' — 35 layers reached, awaiting glyph generation + mint.
-// ---------------------------------------------------------------------------
 export type Phase = 'intro' | 'playing' | 'finished';
+
+export interface PairingInfo {
+  code: string;
+  mcpUrl: string;
+  hermesCommand: string;
+}
 
 interface SessionState {
   // --- mirrored from server ---
@@ -73,14 +77,15 @@ interface SessionState {
   maxLayers: number;
   currentTurn: CurrentTurn | null;
   cooldownEndsAt: number | null;
-  agentBusy: boolean;
+  agentConnected: boolean;
+  pairing: PairingInfo | null;
+  artifact: FinalArtifact | null;
 
   // --- client-owned ---
-  depth: number; // 0..1000 (camera y-mirror)
+  depth: number;
   selectedPreset: LayerType;
   proxyOk: boolean | null;
   recording: boolean;
-  agentComment: string | null;
   startedAt: number | null;
   log: SessionEvent[];
 
@@ -88,6 +93,8 @@ interface SessionState {
   beginLocal: () => void;
 
   // --- server message appliers ---
+  applySessionCreated: (info: PairingInfo) => void;
+  applyAgentPaired: (paired: boolean) => void;
   applySnapshot: (s: GameStateSnapshot) => void;
   applyLayerAdded: (l: PlacedLayer) => void;
   applyTurnChanged: (
@@ -95,15 +102,13 @@ interface SessionState {
     cooldownEndsAt: number | null,
     turnCount: number,
   ) => void;
-  applyAgentThinking: () => void;
-  applyFinished: () => void;
+  applyFinished: (artifact: FinalArtifact | null) => void;
 
   // --- client setters ---
   setDepth: (d: number) => void;
   setSelectedPreset: (t: LayerType) => void;
   setProxyOk: (ok: boolean) => void;
   setRecording: (r: boolean) => void;
-  setAgentComment: (c: string | null) => void;
   pushEvent: (e: PendingEvent) => void;
 }
 
@@ -114,13 +119,14 @@ export const useSession = create<SessionState>((set) => ({
   maxLayers: MAX_LAYERS,
   currentTurn: null,
   cooldownEndsAt: null,
-  agentBusy: false,
+  agentConnected: false,
+  pairing: null,
+  artifact: null,
 
   depth: 0,
   selectedPreset: 'drone',
   proxyOk: null,
   recording: false,
-  agentComment: null,
   startedAt: null,
   log: [],
 
@@ -131,18 +137,19 @@ export const useSession = create<SessionState>((set) => ({
       log: [{ t: 0, type: 'descent_started' }],
     })),
 
+  applySessionCreated: (info) => set(() => ({ pairing: info })),
+
+  applyAgentPaired: (paired) => set(() => ({ agentConnected: paired })),
+
   applySnapshot: (s) =>
     set(() => {
-      // Browser keeps its own phase: 'intro' until beginLocal, then 'playing'.
-      // We only force 'finished' if the server says so; otherwise we leave
-      // the local phase untouched (Partial set leaves it alone).
       const next: Partial<SessionState> = {
         layers: s.layers,
         turnCount: s.turnCount,
         maxLayers: s.maxLayers,
         currentTurn: s.currentTurn,
         cooldownEndsAt: s.cooldownEndsAt,
-        agentBusy: s.agentBusy,
+        agentConnected: s.agentConnected,
       };
       if (s.phase === 'finished') next.phase = 'finished';
       return next;
@@ -165,8 +172,6 @@ export const useSession = create<SessionState>((set) => ({
           comment: layer.comment,
         },
       ],
-      // surface agent comment via dedicated field for HUD
-      agentComment: layer.placedBy === 'agent' ? layer.comment ?? null : s.agentComment,
     })),
 
   applyTurnChanged: (t, cooldownEndsAt, turnCount) =>
@@ -174,26 +179,20 @@ export const useSession = create<SessionState>((set) => ({
       currentTurn: t,
       cooldownEndsAt,
       turnCount,
-      // Clear agent comment when player's turn starts, so HUD doesn't
-      // hold the last reply forever.
-      ...(t === 'player' ? { agentComment: null } : {}),
     })),
 
-  applyAgentThinking: () => set(() => ({ agentBusy: true })),
-
-  applyFinished: () =>
+  applyFinished: (artifact) =>
     set(() => ({
       phase: 'finished',
       currentTurn: null,
       cooldownEndsAt: null,
-      agentBusy: false,
+      artifact,
     })),
 
   setDepth: (d) => set({ depth: d }),
   setSelectedPreset: (t) => set({ selectedPreset: t }),
   setProxyOk: (ok) => set({ proxyOk: ok }),
   setRecording: (r) => set({ recording: r }),
-  setAgentComment: (c) => set({ agentComment: c }),
   pushEvent: (e) =>
     set((s) => ({
       log: [...s.log, { ...e, t: relTime(s.startedAt) } as SessionEvent],

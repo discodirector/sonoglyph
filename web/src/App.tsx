@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { Scene } from './scene/Scene';
 import { Hud } from './ui/Hud';
+import { Intro } from './ui/Intro';
+import { Finale } from './ui/Finale';
 import { LAYER_TYPES, useSession } from './state/useSession';
 import {
   addLayer,
@@ -13,28 +15,29 @@ import {
 import { openBridge, type BridgeConnection } from './net/client';
 
 /**
- * Sonoglyph root.
+ * Sonoglyph root — Day 5.
  *
- * Day 4 architecture:
- *   - Bridge (Node + WS) is the authority for layers, turns, cooldowns.
- *   - Browser opens WS on Begin, sends place_layer, receives layer_added
- *     for both its own placements and the agent's, plays each via the
- *     audio engine.
- *   - Stub agent in bridge auto-places after a short think delay during
- *     the cooldown window. Day 5 swaps stub for Hermes via MCP.
+ * - Bridge WS opens IMMEDIATELY on mount (so we can show the pairing code
+ *   before the player even thinks about clicking Begin).
+ * - The player runs Hermes locally with the printed command; once Hermes
+ *   connects via MCP, server emits `agent_paired` → Begin unlocks.
+ * - On Begin: init audio (requires user gesture), tell server `hello` to
+ *   start the descent.
  */
 export function App() {
   const phase = useSession((s) => s.phase);
   const depth = useSession((s) => s.depth);
+  const agentConnected = useSession((s) => s.agentConnected);
   const beginLocal = useSession((s) => s.beginLocal);
   const setProxyOk = useSession((s) => s.setProxyOk);
   const setRecording = useSession((s) => s.setRecording);
   const setSelectedPreset = useSession((s) => s.setSelectedPreset);
   const pushEvent = useSession((s) => s.pushEvent);
+  const applySessionCreated = useSession((s) => s.applySessionCreated);
+  const applyAgentPaired = useSession((s) => s.applyAgentPaired);
   const applySnapshot = useSession((s) => s.applySnapshot);
   const applyLayerAdded = useSession((s) => s.applyLayerAdded);
   const applyTurnChanged = useSession((s) => s.applyTurnChanged);
-  const applyAgentThinking = useSession((s) => s.applyAgentThinking);
   const applyFinished = useSession((s) => s.applyFinished);
 
   const bridgeRef = useRef<BridgeConnection | null>(null);
@@ -53,7 +56,7 @@ export function App() {
     setGlobalDepth(depth);
   }, [depth]);
 
-  // Keyboard 1-5 selects preset (only when it's player's turn).
+  // Keyboard 1-5 selects preset (only during play).
   useEffect(() => {
     if (phase !== 'playing') return;
     const onKey = (e: KeyboardEvent) => {
@@ -66,7 +69,7 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [phase, setSelectedPreset]);
 
-  // Spectral snapshots every 5s — feeds Kimi journal + glyph generation.
+  // Spectral snapshots — feeds future spectral context for the journal.
   useEffect(() => {
     if (phase !== 'playing') return;
     const interval = window.setInterval(() => {
@@ -81,16 +84,30 @@ export function App() {
   }, [phase, pushEvent]);
 
   // ---------------------------------------------------------------------------
-  // Bridge connection — WS messages dispatched into the store + audio engine.
+  // Open the bridge on mount — well before Begin. We need the code to
+  // show pairing instructions to the player. Audio init still waits for
+  // a user gesture (Begin click).
   // ---------------------------------------------------------------------------
-  const openBridgeConnection = () => {
+  useEffect(() => {
     if (bridgeRef.current && bridgeRef.current.isOpen()) return;
 
     const conn = openBridge((msg) => {
       switch (msg.type) {
+        case 'session_created':
+          applySessionCreated({
+            code: msg.code,
+            mcpUrl: msg.mcpUrl,
+            hermesCommand: msg.hermesCommand,
+          });
+          return;
+        case 'agent_paired':
+          applyAgentPaired(true);
+          return;
+        case 'agent_disconnected':
+          applyAgentPaired(false);
+          return;
         case 'state':
           applySnapshot(msg.state);
-          // Replay any layers that already exist (handles reconnects).
           for (const layer of msg.state.layers) {
             if (!layerHandlesRef.current.has(layer.id)) {
               const handle = addLayer(
@@ -105,8 +122,6 @@ export function App() {
           return;
         case 'layer_added': {
           applyLayerAdded(msg.layer);
-          // Spawn audio for this layer (skip if already known — defensive
-          // against stray duplicates).
           if (!layerHandlesRef.current.has(msg.layer.id)) {
             const handle = addLayer(
               msg.layer.type,
@@ -121,11 +136,8 @@ export function App() {
         case 'turn_changed':
           applyTurnChanged(msg.currentTurn, msg.cooldownEndsAt, msg.turnCount);
           return;
-        case 'agent_thinking':
-          applyAgentThinking();
-          return;
         case 'finished':
-          applyFinished();
+          applyFinished(msg.artifact);
           return;
         case 'error':
           console.warn('[bridge]', msg.message);
@@ -134,12 +146,13 @@ export function App() {
     });
 
     bridgeRef.current = conn;
-  };
 
-  // ---------------------------------------------------------------------------
-  // Player turn handler — only valid when game state allows it. Server
-  // validates again, this is just to avoid useless WS chatter.
-  // ---------------------------------------------------------------------------
+    return () => {
+      conn.close();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handlePlace = (point: [number, number, number]) => {
     const s = useSession.getState();
     if (s.phase !== 'playing') return;
@@ -158,43 +171,20 @@ export function App() {
   };
 
   const handleBegin = async () => {
+    if (!agentConnected) return;
     await initAudio();
     startRecording();
     setRecording(true);
     beginLocal();
-    openBridgeConnection();
+    bridgeRef.current?.send({ type: 'hello' });
   };
 
   return (
     <>
       <Scene onPlace={handlePlace} />
-      {phase === 'intro' ? (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 28,
-            textAlign: 'center',
-            padding: 32,
-            pointerEvents: 'auto',
-          }}
-        >
-          <h1 style={{ letterSpacing: '0.45em', fontWeight: 300, fontSize: 30, margin: 0 }}>
-            SONOGLYPH
-          </h1>
-          <p style={{ maxWidth: 480, color: '#a09d99', fontStyle: 'italic', margin: 0 }}>
-            A descent. Place tones into the dark and the stone will remember —
-            but you do not descend alone.
-          </p>
-          <button onClick={handleBegin}>Begin descent</button>
-        </div>
-      ) : (
-        <Hud />
-      )}
+      {phase === 'intro' && <Intro onBegin={handleBegin} />}
+      {phase === 'playing' && <Hud />}
+      {phase === 'finished' && <Finale />}
     </>
   );
 }

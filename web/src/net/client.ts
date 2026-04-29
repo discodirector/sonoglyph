@@ -1,8 +1,12 @@
 /**
  * Thin WebSocket client. Connects to the bridge `/ws` endpoint and keeps
- * a single connection open for the lifetime of the session. No reconnect
- * logic for now — the descent is short enough that a connection drop ends
- * the session anyway.
+ * a single connection open for the lifetime of the session.
+ *
+ * URL resolution:
+ *   - VITE_BRIDGE_WS env (set at build time) overrides everything
+ *   - In a hosted build with no override, derive from window.location:
+ *     https → wss, same host, /ws path
+ *   - Local dev fallback: ws://localhost:8787/ws
  */
 
 import type { ClientMessage, ServerMessage } from './protocol';
@@ -15,19 +19,9 @@ export interface BridgeConnection {
   isOpen: () => boolean;
 }
 
-/**
- * Open a WS to the bridge. Vite proxies /api but not /ws, so we connect
- * directly to the bridge port. Falls back to host derivation for a hosted
- * deployment.
- */
 export function openBridge(handler: ServerHandler): BridgeConnection {
   const wsUrl = resolveWsUrl();
   const ws = new WebSocket(wsUrl);
-
-  ws.onopen = () => {
-    handler({ type: 'state', state: emptyState() }); // synthetic ping so UI knows connection live
-    ws.send(JSON.stringify({ type: 'hello' } satisfies ClientMessage));
-  };
 
   ws.onmessage = (e) => {
     try {
@@ -62,18 +56,14 @@ export function openBridge(handler: ServerHandler): BridgeConnection {
 function resolveWsUrl(): string {
   const explicit = (import.meta.env.VITE_BRIDGE_WS as string | undefined)?.trim();
   if (explicit) return explicit;
-  // Default — local dev: bridge runs on 8787, browser on 5173.
+  if (typeof window !== 'undefined' && window.location && window.location.host) {
+    const isLocalDev =
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1';
+    if (!isLocalDev) {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${proto}//${window.location.host}/ws`;
+    }
+  }
   return 'ws://localhost:8787/ws';
-}
-
-function emptyState(): import('./protocol').GameStateSnapshot {
-  return {
-    phase: 'lobby',
-    layers: [],
-    turnCount: 0,
-    maxLayers: 35,
-    currentTurn: null,
-    cooldownEndsAt: null,
-    agentBusy: false,
-  };
 }

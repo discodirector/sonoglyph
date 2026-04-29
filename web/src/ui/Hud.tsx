@@ -16,8 +16,15 @@ export function Hud() {
   const maxLayers = useSession((s) => s.maxLayers);
   const currentTurn = useSession((s) => s.currentTurn);
   const cooldownEndsAt = useSession((s) => s.cooldownEndsAt);
-  const agentBusy = useSession((s) => s.agentBusy);
-  const agentComment = useSession((s) => s.agentComment);
+  const agentConnected = useSession((s) => s.agentConnected);
+  // Derive the "currently shown" agent comment from the latest layer.
+  // If the last placed layer is the agent's — show its comment. As soon
+  // as the player places the next layer, that becomes the latest, and
+  // the comment naturally disappears. No timing race possible.
+  const agentComment = useSession((s) => {
+    const last = s.layers[s.layers.length - 1];
+    return last && last.placedBy === 'agent' ? last.comment ?? null : null;
+  });
   const proxyOk = useSession((s) => s.proxyOk);
   const recording = useSession((s) => s.recording);
   const selected = useSession((s) => s.selectedPreset);
@@ -34,15 +41,16 @@ export function Hud() {
     cooldownLeft === 0 &&
     turnCount < maxLayers;
 
+  const isAgentTurn = currentTurn === 'agent';
   const turnLabel =
     phase === 'finished'
       ? 'DESCENT COMPLETE'
-      : agentBusy
-      ? 'HERMES IS LISTENING…'
+      : !agentConnected
+      ? 'HERMES DISCONNECTED'
+      : isAgentTurn
+      ? 'HERMES IS HAVING FUN'
       : currentTurn === 'player'
       ? 'YOUR TURN'
-      : currentTurn === 'agent'
-      ? 'HERMES IS PLACING…'
       : '';
 
   return (
@@ -74,7 +82,7 @@ export function Hud() {
           <span style={{ display: 'flex', gap: 16 }}>
             {recording && <span style={{ color: '#c97a5b' }}>● REC</span>}
             <span>TURN {turnCount.toString().padStart(2, '0')}/{maxLayers}</span>
-            <span style={{ color: turnLabelColor(currentTurn, agentBusy, phase) }}>
+            <span style={{ color: turnLabelColor(currentTurn, agentConnected, phase) }}>
               {turnLabel}
             </span>
             <span>DEPTH {Math.round(depth).toString().padStart(4, '0')}</span>
@@ -115,7 +123,7 @@ export function Hud() {
             'linear-gradient(to top, rgba(5,5,7,0.9) 0%, rgba(5,5,7,0) 100%)',
         }}
       >
-        <CooldownBar cooldownEndsAt={cooldownEndsAt} />
+        <CooldownBar cooldownEndsAt={cooldownEndsAt} agentTurn={isAgentTurn} />
 
         <div
           style={{
@@ -168,7 +176,13 @@ function useCooldownLeft(cooldownEndsAt: number | null): number {
   return Math.max(0, cooldownEndsAt - Date.now());
 }
 
-function CooldownBar({ cooldownEndsAt }: { cooldownEndsAt: number | null }) {
+function CooldownBar({
+  cooldownEndsAt,
+  agentTurn,
+}: {
+  cooldownEndsAt: number | null;
+  agentTurn: boolean;
+}) {
   const left = useCooldownLeft(cooldownEndsAt);
   if (!cooldownEndsAt || left <= 0) {
     return <div style={{ height: 2, background: 'rgba(255,255,255,0.06)' }} />;
@@ -176,6 +190,9 @@ function CooldownBar({ cooldownEndsAt }: { cooldownEndsAt: number | null }) {
   // Estimate progress assuming 10s window; actual remaining vs total.
   const total = 10000;
   const progress = Math.max(0, Math.min(1, 1 - left / total));
+  // Same cyan as the "HERMES IS HAVING FUN" label while it's the agent's
+  // turn; warm orange while the player is in cooldown.
+  const fill = agentTurn ? '#7be0d4' : '#c9885b';
   return (
     <div
       style={{
@@ -190,8 +207,8 @@ function CooldownBar({ cooldownEndsAt }: { cooldownEndsAt: number | null }) {
           position: 'absolute',
           inset: 0,
           width: `${progress * 100}%`,
-          background: '#c9885b',
-          transition: 'width 100ms linear',
+          background: fill,
+          transition: 'width 100ms linear, background 200ms ease',
         }}
       />
     </div>
@@ -250,12 +267,12 @@ function PresetButton({
 
 function turnLabelColor(
   currentTurn: 'player' | 'agent' | null,
-  agentBusy: boolean,
+  agentConnected: boolean,
   phase: string,
 ): string {
   if (phase === 'finished') return '#c9885b';
-  if (agentBusy) return '#7be0d4';
-  if (currentTurn === 'player') return '#d8d4cf';
+  if (!agentConnected) return '#c97a5b';
   if (currentTurn === 'agent') return '#7be0d4';
+  if (currentTurn === 'player') return '#d8d4cf';
   return '#6a6660';
 }

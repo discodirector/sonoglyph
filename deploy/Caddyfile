@@ -1,0 +1,45 @@
+# Caddyfile for sonoglyph.xyz
+#
+# Caddy automatically obtains and renews TLS certificates from Let's Encrypt
+# for any domain it serves over HTTPS. Just configure the site and it works.
+#
+# Layout:
+#   /            → static frontend (Vite build output in /var/www/sonoglyph)
+#   /ws          → WebSocket upgrade to bridge :8787
+#   /mcp         → Streamable HTTP MCP transport to bridge :8787
+#   /health      → bridge health endpoint
+#
+# Deploy with:
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+
+sonoglyph.xyz, www.sonoglyph.xyz {
+	# WebSocket — Caddy auto-detects the Upgrade header.
+	@ws path /ws /ws/*
+	reverse_proxy @ws 127.0.0.1:8787
+
+	# MCP Streamable HTTP — long-lived POST/GET streams.
+	@mcp path /mcp /mcp/*
+	reverse_proxy @mcp 127.0.0.1:8787 {
+		# Don't buffer the SSE response (Hermes needs to see chunks live).
+		flush_interval -1
+	}
+
+	# Health probe.
+	@health path /health
+	reverse_proxy @health 127.0.0.1:8787
+
+	# Everything else → static frontend.
+	root * /var/www/sonoglyph
+	try_files {path} /index.html
+	file_server
+
+	encode zstd gzip
+
+	# Plain logs to journald (caddy.service captures stdout).
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}

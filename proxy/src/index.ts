@@ -1,16 +1,14 @@
 /**
- * Sonoglyph bridge — Hono on Node + WebSocket + (Day 5) MCP server.
+ * Sonoglyph bridge — Day 5.
  *
  * Endpoints:
- *   GET  /health             keys + game stats
- *   WS   /ws                 game state, player → bridge ← agent
- *   POST /api/tts/stream     ElevenLabs streaming TTS (legacy day-3, kept
- *                            for the optional voice toggle)
- *   POST /api/kimi/journal   stub for now, real on day 5/6
- *   POST /api/agent/turn     legacy day-3 path; kept while we transition
+ *   GET  /health          → service status + session count + key presence
+ *   WS   /ws              → browser session; mints a code on connect, manages game state
+ *   ANY  /mcp             → Streamable HTTP MCP transport (player's local Hermes connects here)
  *
- * Day 4: WS + stub agent. Day 5: MCP server attached so Hermes can call
- *        place_layer as an MCP tool, replacing the stub.
+ * No LLMs are called during gameplay — the agent is the player's own Hermes,
+ * arriving over MCP. Kimi is invoked exactly once per session, server-side,
+ * when the descent reaches MAX_LAYERS, to produce the final journal + glyph.
  */
 
 import { config as loadEnv } from 'dotenv';
@@ -26,135 +24,60 @@ import { cors } from 'hono/cors';
 import { WebSocketServer } from 'ws';
 import type { WebSocket as WSConn } from 'ws';
 
-import { callHermes, type AgentContext, type ToolCall } from './agent.js';
-import { getTtsConfig, streamTts } from './tts.js';
-import { GameSession } from './game.js';
+import { GameRegistry } from './registry.js';
+import { handleMcpRequest, disposeMcpForSession } from './mcp.js';
+import { generateFinalArtifact } from './kimi.js';
 import type { ClientMessage, ServerMessage } from './protocol.js';
 
 const PORT = Number(process.env.PROXY_PORT ?? 8787);
-const ORIGIN = process.env.PROXY_ORIGIN ?? 'http://localhost:5173';
+const PUBLIC_BASE_URL =
+  process.env.PUBLIC_BASE_URL ?? `http://localhost:${PORT}`;
+// Comma-separated list of origins. In dev: http://localhost:5173.
+// In prod: https://sonoglyph.xyz.
+const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? 'http://localhost:5173')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 const app = new Hono();
-app.use('*', cors({ origin: ORIGIN, credentials: true }));
+app.use('*', cors({ origin: CORS_ORIGINS, credentials: true }));
 
-// Single global session for the demo (one descent per running process).
-const game = new GameSession();
+const registry = new GameRegistry();
 
 // -----------------------------------------------------------------------------
-app.get('/health', (c) => {
-  const s = game.snapshot();
-  return c.json({
+app.get('/health', (c) =>
+  c.json({
     ok: true,
     service: 'sonoglyph-bridge',
+    sessions: registry.size(),
     keys: {
-      hermes: Boolean(process.env.HERMES_API_KEY),
       kimi: Boolean(process.env.KIMI_API_KEY),
-      elevenlabs: Boolean(
-        process.env.ELEVENLABS_API_KEY && process.env.ELEVENLABS_VOICE_ID,
-      ),
-    },
-    game: {
-      phase: s.phase,
-      turnCount: s.turnCount,
-      maxLayers: s.maxLayers,
-      currentTurn: s.currentTurn,
-      agentBusy: s.agentBusy,
     },
     time: Date.now(),
-  });
-});
+  }),
+);
 
 // -----------------------------------------------------------------------------
-// /api/tts/stream — kept from Day 3 for the optional voice toggle.
+// MCP endpoint — the player's Hermes connects here using the code from the
+// browser. Stateless transport; pairing is via the `?code=` query param.
 // -----------------------------------------------------------------------------
-app.post('/api/tts/stream', async (c) => {
-  const cfg = getTtsConfig();
-  if (!cfg) {
-    return c.json(
-      {
-        error:
-          'TTS unavailable — set ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID in .env',
-      },
-      501,
-    );
-  }
-  let body: { text?: string; mood?: 'calm' | 'ominous' | 'wonder' | 'warning' };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: 'invalid json' }, 400);
-  }
-  const text = (body.text ?? '').trim();
-  if (!text) return c.json({ error: 'text required' }, 400);
-
-  const upstream = await streamTts(cfg, { text, mood: body.mood });
-  if (!upstream.ok) {
-    const errText = await upstream.text().catch(() => '<no body>');
-    console.error('[tts] elevenlabs error', upstream.status, errText.slice(0, 300));
-    return c.json(
-      { error: `elevenlabs ${upstream.status}`, body: errText.slice(0, 500) },
-      502,
-    );
-  }
-  return new Response(upstream.body, {
-    status: 200,
-    headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' },
-  });
-});
-
-// -----------------------------------------------------------------------------
-// Legacy day-3 endpoint, kept while the new flow is being verified.
-// -----------------------------------------------------------------------------
-app.post('/api/agent/turn', async (c) => {
-  let ctx: AgentContext;
-  try {
-    ctx = (await c.req.json()) as AgentContext;
-  } catch {
-    return c.json({ error: 'invalid json' }, 400);
-  }
-  try {
-    const tool: ToolCall = await callHermes(ctx);
-    return c.json({
-      tool,
-      source: process.env.HERMES_API_KEY ? 'hermes' : 'stub',
-    });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : 'unknown';
-    return c.json(
-      { tool: { name: 'wait', arguments: {} }, source: 'error', error: message },
-      200,
-    );
-  }
-});
-
-// -----------------------------------------------------------------------------
-app.post('/api/kimi/journal', async (c) => {
-  const body = await c.req.json().catch(() => ({}));
-  const events = Array.isArray(body?.log) ? body.log.length : 0;
-  return c.json({
-    journal:
-      `Field journal — placeholder.\n\n` +
-      `${events} events recorded across the descent. ` +
-      `The archivist has not yet been called; this text is a stand-in until Kimi wires up.`,
-    word_count: 32,
-    model: 'stub',
-  });
-});
+app.all('/mcp', async (c) => handleMcpRequest(registry, c.req.raw));
 
 // =============================================================================
 // HTTP server + WebSocket upgrade
 // =============================================================================
 
-const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
-  console.log(`[sonoglyph-bridge] listening on http://localhost:${info.port}`);
-  console.log(`[sonoglyph-bridge] ws endpoint:  ws://localhost:${info.port}/ws`);
-  console.log(`[sonoglyph-bridge] CORS origin: ${ORIGIN}`);
+const server = serve({ fetch: app.fetch, port: PORT, hostname: '0.0.0.0' }, (info) => {
+  console.log(`[sonoglyph-bridge] listening on http://0.0.0.0:${info.port}`);
+  console.log(`[sonoglyph-bridge] public base:  ${PUBLIC_BASE_URL}`);
+  console.log(`[sonoglyph-bridge] cors origins: ${CORS_ORIGINS.join(', ')}`);
 });
 
 const wss = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', (req, socket, head) => {
-  if (req.url !== '/ws') {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  if (url.pathname !== '/ws') {
     socket.destroy();
     return;
   }
@@ -164,16 +87,34 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 wss.on('connection', (ws: WSConn) => {
-  console.log('[ws] client connected');
+  // Mint a fresh session per WS connection. Reconnects get a new code; if
+  // we want resumable sessions later, the client can pass ?code= and we'd
+  // look it up here.
+  const { code, game } = registry.create();
+  console.log(`[ws ${code}] client connected`);
 
   const send = (msg: ServerMessage) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
   };
 
-  // Subscribe this client to broadcasts.
-  const unsubscribe = game.subscribe(send);
+  // Subscribe to broadcasts BEFORE sending session_created so we don't miss
+  // an immediate state event.
+  const unsubscribe = game.subscribe((msg) => {
+    send(msg);
+    // Kick off Kimi finalization the moment the game finishes (only once).
+    if (msg.type === 'finished' && msg.artifact === null) {
+      void finalizeWithKimi(game);
+    }
+  });
 
-  // Send initial snapshot.
+  const mcpUrl = `${PUBLIC_BASE_URL.replace(/\/$/, '')}/mcp?code=${code}`;
+  const hermesCommand =
+    `hermes mcp add sonoglyph --url ${mcpUrl} && ` +
+    `hermes chat -q "Play Sonoglyph: loop wait_for_my_turn then place_layer(type, comment) until finished. ` +
+    `Comment is one short evocative line under 80 chars reacting to the music. ` +
+    `Available types: drone, texture, pulse, glitch, breath."`;
+
+  send({ type: 'session_created', code, mcpUrl, hermesCommand });
   send({ type: 'state', state: game.snapshot() });
 
   ws.on('message', (raw) => {
@@ -187,10 +128,10 @@ wss.on('connection', (ws: WSConn) => {
 
     switch (msg.type) {
       case 'hello': {
-        if (game.snapshot().phase === 'lobby') {
-          game.start();
+        const result = game.start();
+        if (!result.ok && result.error !== 'already started') {
+          send({ type: 'error', message: result.error ?? 'cannot start' });
         }
-        // Always re-send fresh state on hello (handles reconnects mid-game).
         send({ type: 'state', state: game.snapshot() });
         return;
       }
@@ -205,11 +146,35 @@ wss.on('connection', (ws: WSConn) => {
   });
 
   ws.on('close', () => {
-    console.log('[ws] client disconnected');
+    console.log(`[ws ${code}] client disconnected`);
     unsubscribe();
+    // The session lives on briefly so a brief reconnect could reattach.
+    // GC will reap it after idleMs if nobody comes back.
+    // MCP entry is dropped only when the registry GCs the game.
+    setTimeout(() => {
+      // If still no listeners and game hasn't started or has finished, drop now.
+      const phase = game.getPhase();
+      if (phase === 'lobby' || phase === 'finished') {
+        disposeMcpForSession(code);
+        registry.drop(code);
+      }
+    }, 30_000);
   });
 
   ws.on('error', (err) => {
-    console.error('[ws] error', err);
+    console.error(`[ws ${code}] error`, err);
   });
 });
+
+// -----------------------------------------------------------------------------
+async function finalizeWithKimi(game: ReturnType<GameRegistry['get']>): Promise<void> {
+  if (!game) return;
+  const layers = game.snapshot().layers;
+  console.log(`[kimi ${game.code}] generating final artifact (${layers.length} layers)`);
+  const artifact = await generateFinalArtifact(layers);
+  game.setFinalArtifact(artifact);
+  console.log(
+    `[kimi ${game.code}] artifact ready (source=${artifact.generatedBy}, ` +
+      `journal=${artifact.journal.length}ch, glyph=${artifact.glyph.length}ch)`,
+  );
+}

@@ -36,7 +36,13 @@ export interface GameStateSnapshot {
   maxLayers: number;
   currentTurn: CurrentTurn | null;
   cooldownEndsAt: number | null;
-  agentBusy: boolean;
+  agentConnected: boolean;
+}
+
+export interface FinalArtifact {
+  journal: string;
+  glyph: string;
+  generatedBy: 'kimi' | 'fallback';
 }
 
 export type ClientMessage =
@@ -49,6 +55,14 @@ export type ClientMessage =
     };
 
 export type ServerMessage =
+  | {
+      type: 'session_created';
+      code: string;
+      mcpUrl: string;
+      hermesCommand: string;
+    }
+  | { type: 'agent_paired' }
+  | { type: 'agent_disconnected' }
   | { type: 'state'; state: GameStateSnapshot }
   | { type: 'layer_added'; layer: PlacedLayer }
   | {
@@ -57,6 +71,9 @@ export type ServerMessage =
       cooldownEndsAt: number | null;
       turnCount: number;
     }
-  | { type: 'agent_thinking' }
-  | { type: 'finished'; reason: 'max_layers' }
+  | {
+      type: 'finished';
+      reason: 'max_layers';
+      artifact: FinalArtifact | null;
+    }
   | { type: 'error'; message: string };

@@ -4,19 +4,25 @@
  * NOTE: This file is mirrored in `web/src/net/protocol.ts`. Keep them
  * in sync when changing message shapes.
  *
- * Flow:
+ * Per-session model (Day 5):
+ *   - Each browser opens a WS without a code → bridge mints a fresh
+ *     GameSession + 6-char code, sends `session_created` immediately.
+ *   - Browser shows the code and the `hermes mcp add` command.
+ *   - Player runs Hermes locally; Hermes connects via MCP using the same
+ *     code → bridge pairs the MCP transport to the session and emits
+ *     `agent_paired` to the browser.
+ *   - Begin is gated until pairing.
  *
- *   1. Browser opens ws → sends `hello`.
- *   2. Bridge replies `state` with full snapshot.
- *   3. Player clicks → browser sends `place_layer`.
- *   4. Bridge validates, broadcasts `layer_added` (placedBy='player'),
- *      switches turn to 'agent', emits `turn_changed` (cooldownEndsAt set).
- *   5. Bridge schedules agent turn — emits `agent_thinking`.
- *      During this, agent calls MCP `place_layer` (Day 5) — for Day 4
- *      it's a stub timer producing a random placement.
- *   6. Bridge broadcasts `layer_added` (placedBy='agent', comment),
- *      switches turn back to 'player'.
- *   7. Repeat until `layers.length === MAX_LAYERS` → `finished` is sent.
+ * Game loop (after pairing + Begin):
+ *   1. Player clicks → browser sends `place_layer`.
+ *   2. Bridge validates, broadcasts `layer_added` (placedBy='player'),
+ *      switches currentTurn='agent', emits `turn_changed` with cooldownEndsAt.
+ *   3. After cooldown elapses, Hermes' `wait_for_my_turn` MCP call unblocks.
+ *      Hermes thinks, then calls `place_layer` MCP tool with type+comment.
+ *   4. Bridge picks a position automatically, broadcasts `layer_added`
+ *      (placedBy='agent', comment), switches to 'player'.
+ *   5. Repeat until `layers.length === MAX_LAYERS` → `finished` (with
+ *      Kimi-generated journal + ASCII glyph attached).
  */
 
 export const MAX_LAYERS = 35;
@@ -52,11 +58,22 @@ export interface GameStateSnapshot {
   maxLayers: number;
   currentTurn: CurrentTurn | null;
   cooldownEndsAt: number | null;
-  agentBusy: boolean;
+  agentConnected: boolean;
+}
+
+/**
+ * Final artifact produced by Kimi when the descent ends. Embedded in
+ * the `finished` message so the browser can render journal + glyph
+ * without a follow-up request.
+ */
+export interface FinalArtifact {
+  journal: string;        // poetic field journal (markdown-ish prose)
+  glyph: string;          // ASCII art (monospace, ~32x16 chars)
+  generatedBy: 'kimi' | 'fallback';
 }
 
 // ---------------------------------------------------------------------------
-// Client → Server
+// Client → Server (browser side)
 // ---------------------------------------------------------------------------
 export type ClientMessage =
   | { type: 'hello' }
@@ -68,9 +85,18 @@ export type ClientMessage =
     };
 
 // ---------------------------------------------------------------------------
-// Server → Client
+// Server → Client (browser side)
 // ---------------------------------------------------------------------------
 export type ServerMessage =
+  | {
+      type: 'session_created';
+      code: string;
+      mcpUrl: string;
+      // Recommended one-liner for the player to paste into their WSL.
+      hermesCommand: string;
+    }
+  | { type: 'agent_paired' }
+  | { type: 'agent_disconnected' }
   | { type: 'state'; state: GameStateSnapshot }
   | { type: 'layer_added'; layer: PlacedLayer }
   | {
@@ -79,6 +105,9 @@ export type ServerMessage =
       cooldownEndsAt: number | null;
       turnCount: number;
     }
-  | { type: 'agent_thinking' }
-  | { type: 'finished'; reason: 'max_layers' }
+  | {
+      type: 'finished';
+      reason: 'max_layers';
+      artifact: FinalArtifact | null;
+    }
   | { type: 'error'; message: string };

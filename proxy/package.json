@@ -13,12 +13,12 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^16.4.7",
     "hono": "^4.6.13",
+    "tsx": "^4.19.2",
     "ws": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/ws": "^8.18.1",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }

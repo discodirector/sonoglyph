@@ -1,0 +1,27 @@
+[Unit]
+Description=Sonoglyph bridge (Hono + WebSocket + MCP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/sonoglyph/proxy
+EnvironmentFile=/srv/sonoglyph/.env
+Environment=NODE_ENV=production
+Environment=PROXY_PORT=8787
+Environment=PUBLIC_BASE_URL=https://sonoglyph.xyz
+Environment=CORS_ORIGINS=https://sonoglyph.xyz,https://www.sonoglyph.xyz
+ExecStart=/srv/sonoglyph/proxy/node_modules/.bin/tsx src/index.ts
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+# Hardening — bridge doesn't need any of this.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/srv/sonoglyph
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
