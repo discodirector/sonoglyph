@@ -25,8 +25,18 @@
  *      Kimi-generated journal + ASCII glyph attached).
  */
 
-export const MAX_LAYERS = 35;
+export const MAX_LAYERS = 15;
 export const COOLDOWN_MS = 10_000;
+
+/**
+ * Camera descent speed (world-units per second). Shared between bridge
+ * and frontend so the bridge can place agent layers at the player's
+ * current visual depth without round-tripping the camera position over WS.
+ *
+ * Total descent = 1000 units over ~6 minutes (a comfortable narrative arc
+ * for ~15 layers with ~10s cooldown + agent thinking time per turn).
+ */
+export const DESCENT_SPEED_PER_SEC = 1000 / 360;
 
 export type LayerType = 'drone' | 'texture' | 'pulse' | 'glitch' | 'breath';
 

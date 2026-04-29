@@ -13,7 +13,7 @@
  *   'intro'    — before Begin: nothing happening, audio silent. Waiting for
  *                Hermes pairing before Begin is enabled.
  *   'playing'  — game running.
- *   'finished' — 35 layers reached; HUD pivots to journal + glyph.
+ *   'finished' — MAX_LAYERS reached; HUD pivots to journal + glyph.
  */
 
 import { create } from 'zustand';

@@ -50,3 +50,25 @@ button:hover {
 a {
   color: var(--accent);
 }
+
+/* "HERMES CHOSE <type>" floating notice. Pinned to mid-screen, drifts
+   upward and fades — paced to feel like it's traveling with the orbs as
+   the camera descends past them. Linear timing keeps it visually anchored
+   to the constant-velocity descent. */
+@keyframes sg-choice-rise {
+  0% {
+    transform: translate(-50%, calc(-50% + 60px));
+    opacity: 0;
+  }
+  10% {
+    transform: translate(-50%, -50%);
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, calc(-50% - 320px));
+    opacity: 0;
+  }
+}

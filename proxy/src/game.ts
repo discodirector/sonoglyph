@@ -19,6 +19,7 @@
 
 import {
   COOLDOWN_MS,
+  DESCENT_SPEED_PER_SEC,
   LAYER_TYPES,
   MAX_LAYERS,
   type CurrentTurn,
@@ -55,6 +56,9 @@ export class GameSession {
   private agentConnected = false;
   private phase: 'lobby' | 'playing' | 'finished' = 'lobby';
   private finalArtifact: FinalArtifact | null = null;
+  // Wall-clock when the descent started; used to project the current camera
+  // depth on the bridge so agent-placed layers land in the player's view.
+  private gameStartedAt: number | null = null;
 
   private listeners = new Set<Listener>();
   private cooldownTimer: NodeJS.Timeout | null = null;
@@ -129,6 +133,7 @@ export class GameSession {
     if (!this.agentConnected) return fail('agent not paired yet');
     this.phase = 'playing';
     this.currentTurn = 'player';
+    this.gameStartedAt = Date.now();
     this.broadcast({ type: 'state', state: this.snapshot() });
     return { ok: true };
   }
@@ -169,7 +174,7 @@ export class GameSession {
     if (this.layers.length >= MAX_LAYERS) return fail('max layers reached');
     if (!LAYER_TYPES.includes(layerType)) return fail(`unknown type: ${layerType}`);
 
-    const position = pickAgentPosition(this.layers);
+    const position = pickAgentPosition(this.gameStartedAt ?? Date.now());
     const freqs = FREQS_BY_TYPE[layerType];
     const freq = freqs[Math.floor(Math.random() * freqs.length)];
 
@@ -324,20 +329,28 @@ export class GameSession {
 }
 
 // ---------------------------------------------------------------------------
-// Position picker — keeps the descent visually coherent regardless of what
-// type Hermes chooses. Each layer drops 10–18 units below the previous one,
-// scattered around a narrow cone in front of the camera.
+// Position picker — drops the agent's orb onto the SAME placement plane
+// (camera_y - 18) the player would click right now. We compute the camera's
+// current Y on the bridge from `gameStartedAt + elapsed * speed`, mirroring
+// the frontend's DescentCamera. The naive "lastY - 14" chain we used before
+// silently broke once Hermes started thinking for 20-30s per turn — by the
+// time the tool call landed, the camera had already moved tens of units past
+// `lastY`, so the orb spawned far above the visible frustum.
 // ---------------------------------------------------------------------------
 function pickAgentPosition(
-  existing: PlacedLayer[],
+  gameStartedAt: number,
 ): [number, number, number] {
-  const lastY = existing.length > 0 ? existing[existing.length - 1].position[1] : 0;
+  const elapsedSec = (Date.now() - gameStartedAt) / 1000;
+  const cameraY = -elapsedSec * DESCENT_SPEED_PER_SEC;
+  // Match the frontend PlacementPlane offset (camera.y - 18) plus a small
+  // jitter so consecutive agent moves don't pile up at exactly the same Y.
+  const placementY = cameraY - 16 - Math.random() * 6;
   const angle = Math.random() * Math.PI * 2;
   const radius = 2 + Math.random() * 4;
   return [
     Math.cos(angle) * radius,
-    lastY - (10 + Math.random() * 8),
-    -(8 + Math.random() * 8) + Math.sin(angle) * 1.5,
+    placementY,
+    -10 + Math.sin(angle) * 3,
   ];
 }
 

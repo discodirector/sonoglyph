@@ -3,8 +3,9 @@
  * MUST stay in sync with the bridge.
  */
 
-export const MAX_LAYERS = 35;
+export const MAX_LAYERS = 15;
 export const COOLDOWN_MS = 10_000;
+export const DESCENT_SPEED_PER_SEC = 1000 / 360;
 
 export type LayerType = 'drone' | 'texture' | 'pulse' | 'glitch' | 'breath';
 

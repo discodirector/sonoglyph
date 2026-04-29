@@ -1,7 +1,7 @@
 import { useSession } from '../state/useSession';
 
 /**
- * Finale screen — shown after the 35th layer.
+ * Finale screen — shown after the final layer (MAX_LAYERS).
  *
  * Displays the Kimi-generated journal + ASCII glyph. If Kimi hasn't
  * responded yet (artifact === null), shows a "the cave is composing…"

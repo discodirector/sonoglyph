@@ -1,12 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { LAYER_TYPES, useSession } from '../state/useSession';
 import type { LayerType } from '../state/useSession';
 
 /**
- * Day 4 HUD — turn-based collaboration with Hermes.
+ * HUD — turn-based collaboration with Hermes.
  *
- * Top row: SONOGLYPH | TURN x/35 | WHO_PLAYS | PROXY status | REC indicator
- * Middle:  agent comment when present
+ * Top row: SONOGLYPH | TURN x/N | WHO_PLAYS | PROXY status | REC indicator
+ * Middle:  agent comment when present + floating "HERMES CHOSE <type>" notice
+ *          that drifts upward each time a new agent layer arrives, so the
+ *          player can see at-a-glance what was just added (the orbs alone
+ *          don't surface their type clearly enough).
  * Bottom:  preset palette (locked outside player's turn / during cooldown)
  *          cooldown progress bar above the palette
  */
@@ -48,13 +51,18 @@ export function Hud() {
       : !agentConnected
       ? 'HERMES DISCONNECTED'
       : isAgentTurn
-      ? 'HERMES IS HAVING FUN'
+      ? 'HERMES IS LISTENING'
       : currentTurn === 'player'
       ? 'YOUR TURN'
       : '';
 
   return (
     <>
+      {/* Floating "HERMES CHOSE <TYPE>" notices — fixed in the world,
+          drifts upward at the descent speed so it visually moves with
+          the orbs that are scrolling past. */}
+      <AgentChoiceLayer />
+
       {/* Top status row + agent comment */}
       <div
         style={{
@@ -190,7 +198,7 @@ function CooldownBar({
   // Estimate progress assuming 10s window; actual remaining vs total.
   const total = 10000;
   const progress = Math.max(0, Math.min(1, 1 - left / total));
-  // Same cyan as the "HERMES IS HAVING FUN" label while it's the agent's
+  // Same cyan as the "HERMES IS LISTENING" label while it's the agent's
   // turn; warm orange while the player is in cooldown.
   const fill = agentTurn ? '#7be0d4' : '#c9885b';
   return (
@@ -262,6 +270,115 @@ function PresetButton({
       <span style={{ fontSize: 9, opacity: 0.6 }}>{index}</span>
       <span>{type}</span>
     </button>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Floating "HERMES CHOSE <type>" notice.
+//
+// We watch the layers list and, every time a new agent layer arrives, push a
+// notice with a fresh key. Each notice mounts in the center of the screen and
+// CSS-animates upward + fades over ~7 seconds — about the same on-screen pace
+// as the orbs sliding past as the camera descends. After the animation the
+// notice is unmounted by an effect.
+//
+// We don't gate on phase: notices only appear when an agent layer is actually
+// added, which can only happen during play, so leaving them in place during
+// 'finished' has no effect.
+// -----------------------------------------------------------------------------
+interface ChoiceNotice {
+  id: string;
+  type: LayerType;
+  bornAt: number;
+}
+
+const NOTICE_LIFETIME_MS = 7000;
+
+function AgentChoiceLayer() {
+  const layers = useSession((s) => s.layers);
+  const [notices, setNotices] = useState<ChoiceNotice[]>([]);
+  const lastSeenAgentIdRef = useRef<string | null>(null);
+
+  // When a new agent layer is appended, push a notice.
+  useEffect(() => {
+    // Find the most recent agent layer.
+    let latestAgent: typeof layers[number] | null = null;
+    for (let i = layers.length - 1; i >= 0; i--) {
+      if (layers[i].placedBy === 'agent') {
+        latestAgent = layers[i];
+        break;
+      }
+    }
+    if (!latestAgent) return;
+    if (lastSeenAgentIdRef.current === latestAgent.id) return;
+    lastSeenAgentIdRef.current = latestAgent.id;
+
+    const notice: ChoiceNotice = {
+      id: latestAgent.id,
+      type: latestAgent.type,
+      bornAt: Date.now(),
+    };
+    setNotices((prev) => [...prev, notice]);
+
+    const timer = window.setTimeout(() => {
+      setNotices((prev) => prev.filter((n) => n.id !== notice.id));
+    }, NOTICE_LIFETIME_MS);
+    return () => window.clearTimeout(timer);
+  }, [layers]);
+
+  if (notices.length === 0) return null;
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        pointerEvents: 'none',
+        overflow: 'hidden',
+      }}
+    >
+      {notices.map((n) => (
+        <ChoiceNoticeView key={n.id} type={n.type} />
+      ))}
+    </div>
+  );
+}
+
+function ChoiceNoticeView({ type }: { type: LayerType }) {
+  const color = presetColors[type];
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: '50%',
+        top: '50%',
+        transform: 'translate(-50%, -50%)',
+        animation: `sg-choice-rise ${NOTICE_LIFETIME_MS}ms linear forwards`,
+        textAlign: 'center',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          letterSpacing: '0.35em',
+          color: '#6a6660',
+          marginBottom: 6,
+        }}
+      >
+        HERMES CHOSE
+      </div>
+      <div
+        style={{
+          fontSize: 26,
+          letterSpacing: '0.3em',
+          color,
+          textTransform: 'uppercase',
+          textShadow: `0 0 18px ${color}55`,
+        }}
+      >
+        {type}
+      </div>
+    </div>
   );
 }
 
