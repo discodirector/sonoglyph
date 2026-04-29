@@ -2,21 +2,35 @@
  * Kimi finalization — called once when a session reaches MAX_LAYERS.
  *
  * Generates two artifacts from the full layer log:
- *   - `journal`  — a short poetic field journal (markdown-ish prose, ~120 words)
- *   - `glyph`    — Autoglyphs-style ASCII art (~32 cols × 16 rows)
+ *   - `journal` — short field journal, 3 paragraphs × 2–3 sentences
+ *   - `glyph`   — Autoglyphs-style ASCII art (32 cols × 16 rows)
  *
- * Kimi is OpenAI-compatible: https://api.moonshot.ai/v1/chat/completions
- * Model: kimi-k2.6 (overridable via env). Uses our server-side key —
- * the player's local Hermes is NOT involved in this step.
+ * Kimi is OpenAI-compatible: https://api.moonshot.ai/v1/chat/completions.
  *
- * Failures are swallowed: if Kimi is down or unauthorized, we return a
- * fallback artifact so the descent still ends gracefully.
+ * Model choice: we default to `moonshot-v1-128k` — a NON-reasoning chat
+ * model. Reasoning variants (kimi-k2.6, kimi-thinking-preview) burn most
+ * of the token budget on hidden chain-of-thought before emitting any
+ * `content`, which led to two earlier failure modes:
+ *   1. finish_reason='length' with empty content → fallthrough to the
+ *      offline stand-in.
+ *   2. our reasoning_content rescue path leaking the model's raw scratchpad
+ *      ("Wait, the user said 4-6 paragraphs…") into the player's journal.
+ * A non-reasoning model returns the answer directly in `content`, so neither
+ * problem can occur. Override with `KIMI_MODEL=…` if you want to experiment.
+ *
+ * Failures are swallowed: if Kimi is down or unauthorized we return a
+ * deterministic fallback so the descent always ends gracefully.
  */
 
 import type { FinalArtifact, PlacedLayer } from './protocol.js';
 
 const KIMI_BASE = process.env.KIMI_BASE_URL ?? 'https://api.moonshot.ai/v1';
-const KIMI_MODEL = process.env.KIMI_MODEL ?? 'kimi-k2.6';
+const KIMI_MODEL = process.env.KIMI_MODEL ?? 'moonshot-v1-128k';
+
+// Hard cap on journal length we surface to the player. The frontend assumes
+// the text fits in a fixed-height paragraph below the glyph; runaway prose
+// would push the layout past the viewport. ~520 chars ≈ 3 short paragraphs.
+const JOURNAL_MAX_CHARS = 520;
 
 export async function generateFinalArtifact(
   layers: PlacedLayer[],
@@ -30,17 +44,12 @@ export async function generateFinalArtifact(
   const transcript = formatTranscript(layers);
 
   try {
-    // High max_tokens because kimi-k2.6 is a reasoning model: a substantial
-    // chunk of the budget is consumed by hidden chain-of-thought before the
-    // visible `content` is emitted. With 380/700 we were watching the
-    // reasoning eat the whole window and getting empty content + finish_reason
-    // 'length'. 4000 leaves comfortable headroom.
     const [journal, glyph] = await Promise.all([
-      callKimi(apiKey, journalPrompt(transcript), 4000),
-      callKimi(apiKey, glyphPrompt(transcript), 4000),
+      callKimi(apiKey, journalPrompt(transcript), 600),
+      callKimi(apiKey, glyphPrompt(transcript), 800),
     ]);
     return {
-      journal: stripFences(journal).trim(),
+      journal: clampJournal(stripFences(journal).trim()),
       glyph: extractGlyph(glyph),
       generatedBy: 'kimi',
     };
@@ -56,48 +65,45 @@ async function callKimi(
   prompt: string,
   maxTokens: number,
 ): Promise<string> {
-  // NOTE: We deliberately do NOT pass `temperature`. kimi-k2.6 rejects any
-  // value other than 1 with a 400 ("invalid temperature: only 1 is allowed
-  // for this model"), and 1 is also the default — so omitting the field is
-  // both safest and most compatible across model versions.
+  const body: Record<string, unknown> = {
+    model: KIMI_MODEL,
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: maxTokens,
+  };
+  // moonshot-v1-* accepts temperature normally and tends to be less varied
+  // than k2.6 — a small kick keeps the prose interesting. Reasoning models
+  // (kimi-k2.6) reject anything other than 1, so don't pass temperature for
+  // them; detect that by model name.
+  if (!/^kimi-k2(\.|-)/.test(KIMI_MODEL)) {
+    body.temperature = 0.85;
+  }
+
   const res = await fetch(`${KIMI_BASE}/chat/completions`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify({
-      model: KIMI_MODEL,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: maxTokens,
-    }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`kimi ${res.status}: ${body.slice(0, 300)}`);
+    const text = await res.text().catch(() => '');
+    throw new Error(`kimi ${res.status}: ${text.slice(0, 300)}`);
   }
   const data = (await res.json()) as {
     choices?: Array<{
-      message?: { content?: string; reasoning_content?: string };
+      message?: { content?: string };
       finish_reason?: string;
     }>;
   };
   const choice = data.choices?.[0];
   const content = choice?.message?.content?.trim();
-  if (content) return content;
-  // Reasoning models (kimi-k2.6) sometimes truncate before emitting the
-  // visible content — fall back to reasoning_content, which contains the
-  // model's pre-finalized text and is usually still answerable.
-  const reasoning = choice?.message?.reasoning_content?.trim();
-  if (reasoning) {
-    console.warn(
-      `[kimi] empty content (finish_reason=${choice?.finish_reason ?? '?'}) — using reasoning_content`,
+  if (!content) {
+    throw new Error(
+      `kimi returned empty content (finish_reason=${choice?.finish_reason ?? '?'})`,
     );
-    return reasoning;
   }
-  throw new Error(
-    `kimi returned empty content (finish_reason=${choice?.finish_reason ?? '?'})`,
-  );
+  return content;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,16 +119,19 @@ function formatTranscript(layers: PlacedLayer[]): string {
 
 function journalPrompt(transcript: string): string {
   return [
-    'You are the archivist of Sonoglyph — a contemplative descent through',
-    'an abstract sonic void, jointly composed by a human player and the',
-    'Hermes agent. The descent is now complete. Below is the placement',
-    'log.',
+    'You are the archivist of a contemplative descent through an abstract',
+    'sonic void, jointly composed by a human player and the Hermes agent.',
+    'The descent is now complete. Below is the placement log.',
     '',
-    'Write a SHORT field journal (about 100–140 words, 4–6 short paragraphs).',
-    'Tone: introspective, slightly mineral, like a geologist taking notes',
-    'inside a cave. Reference specific moves where they were striking.',
-    "Do NOT title it. Do NOT use bullet points. Do NOT use the word 'Sonoglyph'.",
-    'Plain prose only.',
+    'Write a SHORT field journal. STRICT FORMAT:',
+    '- Exactly 3 paragraphs.',
+    '- Each paragraph 2 to 3 sentences (NO MORE).',
+    '- Total length under 480 characters.',
+    '- Tone: introspective, slightly mineral, like a geologist taking notes',
+    '  inside a cave. Reference one or two striking moves.',
+    '- No title, no bullet points, no headings, no markdown formatting.',
+    '- Do not mention "Sonoglyph" by name.',
+    '- Output ONLY the prose. No preamble, no explanation, no closing remark.',
     '',
     'Log:',
     transcript,
@@ -177,8 +186,6 @@ function extractGlyph(raw: string): string {
     const allowed = /^[ .\-=+*#/\\|<>]+$/;
     block = lines.filter((l) => l.length >= 8 && allowed.test(l));
   }
-  // Pad/truncate to 32 cols × 16 rows so the frontend can render in a
-  // fixed-size box without measuring.
   block = block
     .slice(0, 16)
     .map((l) => (l.length >= 32 ? l.slice(0, 32) : l.padEnd(32, ' ')));
@@ -187,9 +194,29 @@ function extractGlyph(raw: string): string {
 }
 
 function stripFences(text: string): string {
-  // Strip ```lang ... ``` if Kimi wrapped the answer.
   const m = text.match(/```(?:\w+)?\s*\n?([\s\S]*?)\n?```/);
   return m ? m[1] : text;
+}
+
+/**
+ * Last-resort defense against an over-eager model. If the prose came back
+ * longer than the layout can hold, truncate at a sentence/paragraph break
+ * near the cap. We don't want to ship the player a wall of text that pushes
+ * the journal past the viewport.
+ */
+function clampJournal(text: string): string {
+  if (text.length <= JOURNAL_MAX_CHARS) return text;
+  const slice = text.slice(0, JOURNAL_MAX_CHARS);
+  // Prefer a paragraph break, then a sentence end, then any whitespace.
+  const lastPara = slice.lastIndexOf('\n\n');
+  if (lastPara > JOURNAL_MAX_CHARS * 0.5) return slice.slice(0, lastPara).trim();
+  const lastSentence = Math.max(
+    slice.lastIndexOf('. '),
+    slice.lastIndexOf('.\n'),
+  );
+  if (lastSentence > JOURNAL_MAX_CHARS * 0.5)
+    return slice.slice(0, lastSentence + 1).trim();
+  return slice.trim() + '…';
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +235,6 @@ function fallback(layers: PlacedLayer[]): FinalArtifact {
     `${summary}. Some moves landed close together, others left long gaps; ` +
     `the cave kept everything. — (Kimi was not available; this is a stand-in.)`;
 
-  // Simple deterministic glyph derived from layer types.
   const rows: string[] = [];
   for (let r = 0; r < 16; r++) {
     let row = '';
