@@ -1,42 +1,45 @@
 # Caddyfile for sonoglyph.xyz
 #
-# Caddy automatically obtains and renews TLS certificates from Let's Encrypt
-# for any domain it serves over HTTPS. Just configure the site and it works.
+# Caddy auto-obtains and renews TLS for any domain it serves over HTTPS.
 #
 # Layout:
-#   /            → static frontend (Vite build output in /var/www/sonoglyph)
-#   /ws          → WebSocket upgrade to bridge :8787
-#   /mcp         → Streamable HTTP MCP transport to bridge :8787
-#   /health      → bridge health endpoint
+#   /ws*    → bridge :8787  (WebSocket)
+#   /mcp*   → bridge :8787  (Streamable HTTP MCP, no buffering)
+#   /health → bridge :8787
+#   else    → static frontend
 #
-# Deploy with:
+# Note on directive order: `try_files` has higher priority than
+# `reverse_proxy` in Caddy's default ordering, so a top-level try_files
+# would intercept /health and /mcp before they ever reach the proxy.
+# Using `handle` blocks makes the routing explicit and source-ordered.
+#
+# Deploy:
 #   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
 #   sudo systemctl reload caddy
 
 sonoglyph.xyz, www.sonoglyph.xyz {
-	# WebSocket — Caddy auto-detects the Upgrade header.
-	@ws path /ws /ws/*
-	reverse_proxy @ws 127.0.0.1:8787
-
-	# MCP Streamable HTTP — long-lived POST/GET streams.
-	@mcp path /mcp /mcp/*
-	reverse_proxy @mcp 127.0.0.1:8787 {
-		# Don't buffer the SSE response (Hermes needs to see chunks live).
-		flush_interval -1
-	}
-
-	# Health probe.
-	@health path /health
-	reverse_proxy @health 127.0.0.1:8787
-
-	# Everything else → static frontend.
-	root * /var/www/sonoglyph
-	try_files {path} /index.html
-	file_server
-
 	encode zstd gzip
 
-	# Plain logs to journald (caddy.service captures stdout).
+	handle /ws /ws/* {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	handle /mcp /mcp/* {
+		reverse_proxy 127.0.0.1:8787 {
+			flush_interval -1
+		}
+	}
+
+	handle /health {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	handle {
+		root * /var/www/sonoglyph
+		try_files {path} /index.html
+		file_server
+	}
+
 	log {
 		output stdout
 		format console
