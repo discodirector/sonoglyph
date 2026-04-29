@@ -17,8 +17,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 const log = (...args) =>
   console.log(`[${new Date().toISOString().slice(11, 23)}]`, ...args);
 
-const BRIDGE_HTTP = 'http://127.0.0.1:8787';
-const BRIDGE_WS = 'ws://127.0.0.1:8787/ws';
+const BRIDGE_HTTP = process.env.BRIDGE_HTTP ?? 'http://127.0.0.1:8787';
+const BRIDGE_WS = process.env.BRIDGE_WS ?? 'ws://127.0.0.1:8787/ws';
 
 async function main() {
   // ---- 1. Open WS, wait for session_created ----
