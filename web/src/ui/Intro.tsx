@@ -140,8 +140,14 @@ function PairingPanel({
         {code}
       </div>
 
-      <CommandBlock label="① IN WSL — RUN" body={command} />
-      <CommandBlock label="② PASTE INTO HERMES CHAT, THEN ENTER" body={prompt} />
+      <CommandBlock
+        label="① IN WSL — RUN, ANSWER PROMPTS WITH 'Y'"
+        body={command}
+      />
+      <CommandBlock
+        label="② IN THE OPENED HERMES CHAT, PASTE THIS AND HIT ENTER"
+        body={prompt}
+      />
       <div
         style={{
           fontSize: 10,
@@ -152,7 +158,9 @@ function PairingPanel({
           lineHeight: 1.7,
         }}
       >
-        KEEP THE WSL TERMINAL OPEN — closing it disconnects your Hermes mid-game.
+        KEEP THE WSL TERMINAL OPEN throughout the game.
+        <br />
+        Once the AGENT PAIRED light is on, hit Begin and place your first layer.
       </div>
 
       <details

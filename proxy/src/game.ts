@@ -58,7 +58,6 @@ export class GameSession {
 
   private listeners = new Set<Listener>();
   private cooldownTimer: NodeJS.Timeout | null = null;
-  private disconnectGrace: NodeJS.Timeout | null = null;
   private waiters: Array<() => boolean> = [];
 
   constructor(code: string) {
@@ -99,37 +98,29 @@ export class GameSession {
   /**
    * Called by the bridge when Hermes' MCP transport pairs to this session.
    *
-   * Disconnects use a 5-second grace period: Hermes' `chat -q` closes the
-   * MCP session via DELETE the moment the model finishes its turn, but the
-   * player will typically re-launch it (or it'll auto-loop). Without grace,
-   * the HUD bounces between AGENT PAIRED and HERMES DISCONNECTED on every
-   * tool-call cycle.
+   * Pairing is **sticky** — once we've seen a real MCP `initialize` from
+   * Hermes for this code, we consider the agent paired for the lifetime
+   * of the GameSession. The reason: Hermes opens MCP transiently. Both
+   * `hermes mcp add` (tool discovery) and each tool-call cycle from
+   * `hermes chat` end with an explicit DELETE that tears the session
+   * down. Treating those DELETEs as "agent disconnected" would make the
+   * HUD bounce on every action and gate the Begin button incorrectly.
+   *
+   * Trade-off: if the player closes their WSL terminal mid-game, we'll
+   * still report PAIRED until the session is GC'd. The player will
+   * notice because Hermes stops making moves; the bridge can't distinguish
+   * "Hermes is between tool-calls" from "Hermes has gone away" without
+   * polling, which we don't want to do over MCP.
    */
   setAgentConnected(connected: boolean): void {
-    if (connected) {
-      // Cancel any pending disconnect.
-      if (this.disconnectGrace) {
-        clearTimeout(this.disconnectGrace);
-        this.disconnectGrace = null;
-      }
-      if (this.agentConnected) return;
-      this.agentConnected = true;
-      this.broadcast({ type: 'agent_paired' });
+    if (!connected) {
+      // Ignore disconnect signals from MCP transport closes — see comment
+      // above. We only ever report "paired" once it happens.
       return;
     }
-    // disconnect — wait briefly to see if Hermes reconnects
-    if (this.disconnectGrace) clearTimeout(this.disconnectGrace);
-    this.disconnectGrace = setTimeout(() => {
-      this.disconnectGrace = null;
-      if (!this.agentConnected) return;
-      this.agentConnected = false;
-      this.broadcast({ type: 'agent_disconnected' });
-      // Unblock anyone waiting (they'll see stale state and can re-poll).
-      this.fireWaiters();
-    }, 5_000);
-    if (typeof this.disconnectGrace.unref === 'function') {
-      this.disconnectGrace.unref();
-    }
+    if (this.agentConnected) return;
+    this.agentConnected = true;
+    this.broadcast({ type: 'agent_paired' });
   }
 
   /** Begin the descent. Requires the agent to be paired. */
@@ -251,9 +242,7 @@ export class GameSession {
   /** Tear down timers, drop subscribers. Used by registry GC. */
   dispose(): void {
     if (this.cooldownTimer) clearTimeout(this.cooldownTimer);
-    if (this.disconnectGrace) clearTimeout(this.disconnectGrace);
     this.cooldownTimer = null;
-    this.disconnectGrace = null;
     this.waiters.length = 0;
     this.listeners.clear();
   }
