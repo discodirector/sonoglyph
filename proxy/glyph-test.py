@@ -158,26 +158,17 @@ def build_prompt(layers):
     ])
 
 
-def main():
+def call_kimi(prompt: str, temperature: float) -> str:
+    """One Kimi call with given temperature."""
     base = os.environ["KIMI_BASE_URL"]
     key = os.environ["KIMI_API_KEY"]
     model = os.environ["KIMI_MODEL"]
-
-    density_map, poetic, prompt = build_prompt(LAYERS)
-
-    print("=== DENSITY MAP ===", file=sys.stderr)
-    print(density_map, file=sys.stderr)
-    print("=== POETIC INTENT ===", file=sys.stderr)
-    print(poetic, file=sys.stderr)
-    print("=== /CONTEXT ===\n", file=sys.stderr)
-
     body = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 1000,
-        "temperature": 0.85,
+        "temperature": temperature,
     }).encode("utf-8")
-
     req = urllib.request.Request(
         f"{base}/chat/completions",
         data=body,
@@ -186,18 +177,98 @@ def main():
             "content-type": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=120) as r:
+    with urllib.request.urlopen(req, timeout=180) as r:
         data = json.loads(r.read().decode("utf-8"))
+    return data["choices"][0]["message"].get("content", "")
 
-    choice = data["choices"][0]
-    text = choice["message"].get("content", "")
-    print(f"finish_reason: {choice.get('finish_reason')}")
-    print(f"chars: {len(text)}")
-    print("--- raw response ---")
-    print(text)
-    print()
-    print("--- normalized (what the player sees) ---")
-    print(normalize_glyph(text))
+
+def detect_tile_runs(s: str) -> int:
+    if len(s) < 8:
+        return 0
+    worst = 0
+    for length in range(1, 5):
+        for start in range(0, len(s) - length * 4 + 1):
+            seg = s[start:start + length]
+            reps = 1
+            pos = start + length
+            while pos + length <= len(s) and s[pos:pos + length] == seg:
+                reps += 1
+                pos += length
+            if reps >= 4 and reps > worst:
+                worst = reps
+    return worst
+
+
+def score_glyph(grid: str) -> float:
+    """Mirror of scoreGlyph in proxy/src/kimi.ts."""
+    import math as _math
+    rows = grid.split("\n")
+    trimmed = [r.replace(" ", "") for r in rows]
+
+    filled_rows = sum(1 for t in trimmed if len(t) >= 4)
+    unique_filled = len({rows[i] for i in range(len(rows)) if len(trimmed[i]) >= 4})
+
+    counts = {}
+    total = 0
+    for r in rows:
+        for ch in r:
+            if ch == " ":
+                continue
+            counts[ch] = counts.get(ch, 0) + 1
+            total += 1
+    entropy = 0.0
+    if total > 0:
+        for c in counts.values():
+            p = c / total
+            entropy -= p * _math.log2(p)
+
+    filled_densities = [len(t) for t in trimmed if len(t) >= 4]
+    std_dev = 0.0
+    if len(filled_densities) > 1:
+        mean = sum(filled_densities) / len(filled_densities)
+        variance = sum((d - mean) ** 2 for d in filled_densities) / len(filled_densities)
+        std_dev = _math.sqrt(variance)
+
+    tile_penalty = sum(detect_tile_runs(t) for t in trimmed)
+
+    return (
+        filled_rows * 2.0
+        + unique_filled * 0.5
+        + entropy * 3.0
+        + std_dev * 1.0
+        - tile_penalty * 1.5
+    )
+
+
+def main():
+    band_palettes, poetic, prompt = build_prompt(LAYERS)
+
+    print("=== BAND PALETTES ===", file=sys.stderr)
+    print(band_palettes, file=sys.stderr)
+    print("=== POETIC INTENT ===", file=sys.stderr)
+    print(poetic, file=sys.stderr)
+    print("=== /CONTEXT ===\n", file=sys.stderr)
+
+    import concurrent.futures
+    temps = [0.7, 0.9, 1.0]
+    print(f"Generating {len(temps)} candidates in parallel "
+          f"(temps={temps})...", file=sys.stderr)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(temps)) as ex:
+        futures = [ex.submit(call_kimi, prompt, t) for t in temps]
+        results = [f.result() for f in futures]
+
+    scored = []
+    for i, raw in enumerate(results):
+        grid = normalize_glyph(raw)
+        s = score_glyph(grid)
+        scored.append((s, temps[i], grid, raw))
+        print(f"\n--- candidate {i+1} (temp={temps[i]}, score={s:.2f}) ---")
+        print(grid)
+
+    scored.sort(key=lambda x: -x[0])
+    print(f"\n=== WINNER (score={scored[0][0]:.2f}, temp={scored[0][1]}) ===")
+    print(scored[0][2])
 
 
 ALLOWED_GLYPH = set(" .-=+*#/\\|<>")

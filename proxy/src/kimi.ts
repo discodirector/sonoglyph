@@ -47,19 +47,37 @@ export async function generateFinalArtifact(
   const transcript = formatTranscript(layers);
   const bandPalettes = buildBandPalettes(layers);
   const poeticIntent = buildPoeticIntent(layers);
+  const gPrompt = glyphPrompt(transcript, bandPalettes, poeticIntent);
 
   try {
-    const [journal, glyph] = await Promise.all([
+    // Best-of-N glyph generation. The model has high quality variance on
+    // glyphs — sometimes it produces a varied, breathing composition and
+    // sometimes it falls back to tiled wallpaper. Generating 3 candidates
+    // in parallel at high temperature and picking the one with the best
+    // structural score reliably gets us a glyph worth showing.
+    const [journal, ...glyphCandidates] = await Promise.all([
       callKimi(apiKey, journalPrompt(transcript), 600),
-      callKimi(
-        apiKey,
-        glyphPrompt(transcript, bandPalettes, poeticIntent),
-        1000,
-      ),
+      // Temperature spread within moonshot-v1's [0, 1] window. Three
+      // distinct points so the candidates actually diverge instead of
+      // collapsing to similar samples.
+      callKimi(apiKey, gPrompt, 1000, 0.7),
+      callKimi(apiKey, gPrompt, 1000, 0.9),
+      callKimi(apiKey, gPrompt, 1000, 1.0),
     ]);
+
+    const scored = glyphCandidates.map((raw) => {
+      const grid = extractGlyph(raw);
+      return { grid, score: scoreGlyph(grid) };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    console.log(
+      `[kimi] glyph candidate scores: ${scored.map((s) => s.score.toFixed(2)).join(', ')} ` +
+        `(picked top: ${scored[0].score.toFixed(2)})`,
+    );
+
     return {
       journal: clampJournal(stripFences(journal).trim()),
-      glyph: extractGlyph(glyph),
+      glyph: scored[0].grid,
       generatedBy: 'kimi',
     };
   } catch (err) {
@@ -73,6 +91,7 @@ async function callKimi(
   apiKey: string,
   prompt: string,
   maxTokens: number,
+  temperature?: number,
 ): Promise<string> {
   const body: Record<string, unknown> = {
     model: KIMI_MODEL,
@@ -80,11 +99,10 @@ async function callKimi(
     max_tokens: maxTokens,
   };
   // moonshot-v1-* accepts temperature normally and tends to be less varied
-  // than k2.6 — a small kick keeps the prose interesting. Reasoning models
-  // (kimi-k2.6) reject anything other than 1, so don't pass temperature for
-  // them; detect that by model name.
+  // than k2.6. Reasoning models (kimi-k2.6) reject anything other than 1,
+  // so don't pass temperature for them; detect that by model name.
   if (!/^kimi-k2(\.|-)/.test(KIMI_MODEL)) {
-    body.temperature = 0.85;
+    body.temperature = temperature ?? 0.85;
   }
 
   const res = await fetch(`${KIMI_BASE}/chat/completions`, {
@@ -329,6 +347,111 @@ function buildBandPalettes(layers: PlacedLayer[]): string {
       );
     })
     .join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Glyph quality scorer.
+//
+// We generate N glyph candidates in parallel and pick the one with the
+// highest score here. The score rewards visual variation and penalises
+// tile-like wallpaper output AND empty/short outputs. Components:
+//
+//   + filledRows     — rows with ≥4 non-space chars. The most important
+//                      term: a 3-row glyph cannot beat a 14-row glyph by
+//                      having higher "uniqueness ratio".
+//   + uniqueFilled   — distinct filled rows (so 16 identical rows still
+//                      score badly).
+//   + charEntropy    — Shannon entropy over the non-space char distribution.
+//                      A glyph using 2 chars scores low, one using the
+//                      whole palette scores high.
+//   + densityStdDev  — std-deviation of non-space chars per row. A uniform
+//                      fill scores 0; a glyph that breathes scores higher.
+//   - tilePenalty    — sum across rows of detected repeating-segment counts.
+//                      "+#+#+#+#" gives a high penalty.
+//
+// Coefficients chosen empirically — adjustable.
+// ---------------------------------------------------------------------------
+function scoreGlyph(grid: string): number {
+  const rows = grid.split('\n');
+  const trimmed = rows.map((r) => r.replace(/\s+/g, ''));
+
+  // 1. Filled rows — rows with real content. ≥4 non-space chars threshold
+  // dodges the degenerate "single dot" rows.
+  const filledRows = trimmed.filter((t) => t.length >= 4).length;
+
+  // 2. Unique filled rows: distinct row strings among the filled ones.
+  // Use the original (with-whitespace) row so leading-space layouts count
+  // as different.
+  const filledSet = new Set<string>();
+  for (let i = 0; i < rows.length; i++) {
+    if (trimmed[i].length >= 4) filledSet.add(rows[i]);
+  }
+  const uniqueFilled = filledSet.size;
+
+  // 3. Character entropy across the whole glyph.
+  const counts = new Map<string, number>();
+  let total = 0;
+  for (const r of rows) {
+    for (const ch of r) {
+      if (ch === ' ') continue;
+      counts.set(ch, (counts.get(ch) ?? 0) + 1);
+      total += 1;
+    }
+  }
+  let entropy = 0;
+  if (total > 0) {
+    for (const c of counts.values()) {
+      const p = c / total;
+      entropy -= p * Math.log2(p);
+    }
+  }
+
+  // 4. Density std-dev across filled rows only — empty rows would
+  // artificially inflate it and reward sparse, half-empty glyphs.
+  const filledDensities = trimmed
+    .filter((t) => t.length >= 4)
+    .map((t) => t.length);
+  let stdDev = 0;
+  if (filledDensities.length > 1) {
+    const mean =
+      filledDensities.reduce((a, b) => a + b, 0) / filledDensities.length;
+    const variance =
+      filledDensities.reduce((a, b) => a + (b - mean) ** 2, 0) /
+      filledDensities.length;
+    stdDev = Math.sqrt(variance);
+  }
+
+  // 5. Tile penalty.
+  let tilePenalty = 0;
+  for (const r of trimmed) {
+    tilePenalty += detectTileRuns(r);
+  }
+
+  return (
+    filledRows * 2.0 +
+    uniqueFilled * 0.5 +
+    entropy * 3.0 +
+    stdDev * 1.0 -
+    tilePenalty * 1.5
+  );
+}
+
+function detectTileRuns(s: string): number {
+  if (s.length < 8) return 0;
+  let worst = 0;
+  for (let len = 1; len <= 4; len++) {
+    for (let start = 0; start + len * 4 <= s.length; start++) {
+      const seg = s.slice(start, start + len);
+      let reps = 1;
+      let pos = start + len;
+      while (pos + len <= s.length && s.slice(pos, pos + len) === seg) {
+        reps += 1;
+        pos += len;
+      }
+      if (reps >= 4 && reps > worst) worst = reps;
+    }
+  }
+  return worst;
 }
 
 function buildPoeticIntent(layers: PlacedLayer[]): string {
