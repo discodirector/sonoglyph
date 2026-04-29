@@ -27,10 +27,13 @@ import type { FinalArtifact, PlacedLayer } from './protocol.js';
 const KIMI_BASE = process.env.KIMI_BASE_URL ?? 'https://api.moonshot.ai/v1';
 const KIMI_MODEL = process.env.KIMI_MODEL ?? 'moonshot-v1-128k';
 
-// Hard cap on journal length we surface to the player. The frontend assumes
-// the text fits in a fixed-height paragraph below the glyph; runaway prose
-// would push the layout past the viewport. ~520 chars ≈ 3 short paragraphs.
-const JOURNAL_MAX_CHARS = 520;
+// Hard cap on journal length we surface to the player. Journal lives in a
+// 540px-wide column with line-height 1.7 — at fontSize 13 that's roughly
+// 70 chars per line, so 720 chars ≈ 10 lines, comfortably above the fold.
+// We over-shoot the prompt's 480-char advisory because moonshot-v1-128k
+// tends to come in around 600 even when asked for less; clamping further
+// would routinely chop the third paragraph mid-thought.
+const JOURNAL_MAX_CHARS = 720;
 
 export async function generateFinalArtifact(
   layers: PlacedLayer[],
@@ -123,15 +126,26 @@ function journalPrompt(transcript: string): string {
     'sonic void, jointly composed by a human player and the Hermes agent.',
     'The descent is now complete. Below is the placement log.',
     '',
-    'Write a SHORT field journal. STRICT FORMAT:',
-    '- Exactly 3 paragraphs.',
-    '- Each paragraph 2 to 3 sentences (NO MORE).',
-    '- Total length under 480 characters.',
-    '- Tone: introspective, slightly mineral, like a geologist taking notes',
-    '  inside a cave. Reference one or two striking moves.',
-    '- No title, no bullet points, no headings, no markdown formatting.',
-    '- Do not mention "Sonoglyph" by name.',
-    '- Output ONLY the prose. No preamble, no explanation, no closing remark.',
+    'Write a SHORT field journal. RULES — follow exactly:',
+    '',
+    '1. Exactly THREE paragraphs.',
+    '2. Each paragraph: 2 to 3 sentences, never more.',
+    '3. Total length: under 480 characters.',
+    '4. Separate paragraphs with a SINGLE BLANK LINE (i.e. two newlines).',
+    '   This is mandatory; the layout depends on it.',
+    '5. Tone: introspective, slightly mineral — a geologist taking notes',
+    '   inside a cave. Reference one or two striking moves from the log.',
+    '6. No title. No bullet points. No headings. No markdown formatting.',
+    '7. Do not mention "Sonoglyph" by name.',
+    '8. Output ONLY the prose itself. No preamble, no commentary, no',
+    '   closing remark.',
+    '',
+    'Format example (style only — do not copy the wording):',
+    '<para 1: 2-3 sentences>',
+    '',
+    '<para 2: 2-3 sentences>',
+    '',
+    '<para 3: 2-3 sentences>',
     '',
     'Log:',
     transcript,
