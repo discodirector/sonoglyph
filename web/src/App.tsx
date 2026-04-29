@@ -98,6 +98,7 @@ export function App() {
             code: msg.code,
             mcpUrl: msg.mcpUrl,
             hermesCommand: msg.hermesCommand,
+            hermesAddCommand: msg.hermesAddCommand,
           });
           return;
         case 'agent_paired':

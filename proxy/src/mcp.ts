@@ -65,6 +65,11 @@ export async function handleMcpRequest(
 ): Promise<Response> {
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
+  const ua = request.headers.get('user-agent') ?? '?';
+  console.log(
+    `[mcp] ${request.method} ${url.pathname}${url.search}  ua="${ua.slice(0, 60)}"`,
+  );
+
   if (!code) {
     return new Response(
       JSON.stringify({
@@ -125,6 +130,7 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
       inputSchema: {},
     },
     async () => {
+      console.log(`[mcp ${code}] tool: get_state`);
       const s = game.snapshot();
       return {
         content: [
@@ -157,7 +163,9 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
     },
     async ({ timeout_sec }) => {
       const ms = (timeout_sec ?? 120) * 1000;
+      console.log(`[mcp ${code}] tool: wait_for_my_turn (timeout=${ms}ms)`);
       const res = await game.awaitAgentTurn(ms);
+      console.log(`[mcp ${code}]   → ${res.kind}`);
       const payload = {
         it_is_my_turn: res.kind === 'ready',
         finished: res.kind === 'finished',
@@ -191,8 +199,10 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
       },
     },
     async ({ type, comment }) => {
+      console.log(`[mcp ${code}] tool: place_layer type=${type} "${comment.slice(0, 60)}"`);
       const result = game.agentPlace(type, comment);
       if (!result.ok) {
+        console.log(`[mcp ${code}]   → REJECTED: ${result.error}`);
         return {
           isError: true,
           content: [
@@ -201,6 +211,7 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
         };
       }
       const layer = result.layer!;
+      console.log(`[mcp ${code}]   → placed @ [${layer.position.map((n) => n.toFixed(1)).join(',')}]`);
       return {
         content: [
           {
@@ -227,19 +238,27 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
   // ---- transport (stateful: one transport reused across requests for this
   // GameSession). Pairing to the GameSession is done at the URL layer via
   // ?code=; the transport's own session ID is opaque to us.
+  //
+  // CRITICAL: pair ONLY on a real MCP initialize handshake. Otherwise random
+  // probes (Telegram link previews, web crawlers, anything that hits /mcp
+  // with a known code) would falsely flip the "AGENT PAIRED" indicator in
+  // the browser, and the player would assume their Hermes is connected
+  // when it isn't.
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
     enableJsonResponse: true,
+    onsessioninitialized: () => {
+      console.log(`[mcp ${code}] session initialized — agent paired`);
+      game.setAgentConnected(true);
+    },
+    onsessionclosed: () => {
+      console.log(`[mcp ${code}] session closed — agent disconnected`);
+      game.setAgentConnected(false);
+    },
   });
   server.connect(transport).catch((err) => {
     console.error(`[mcp:${code}] connect failed`, err);
   });
-
-  // Mark the session as paired the moment Hermes connects, and unpair when
-  // the transport closes. Since stateless transports come and go per
-  // request, we instead key off the *first* successful request: the
-  // simpler signal is "we have an MCP entry for this code".
-  game.setAgentConnected(true);
 
   const detach = () => {
     game.setAgentConnected(false);

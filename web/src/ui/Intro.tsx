@@ -60,7 +60,11 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
           {proxyOk === false ? 'BRIDGE OFFLINE' : 'OPENING BRIDGE…'}
         </p>
       ) : (
-        <PairingPanel command={pairing.hermesCommand} code={pairing.code} />
+        <PairingPanel
+          command={pairing.hermesCommand}
+          addCommand={pairing.hermesAddCommand}
+          code={pairing.code}
+        />
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -99,19 +103,15 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
 }
 
 // -----------------------------------------------------------------------------
-function PairingPanel({ command, code }: { command: string; code: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const onCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    } catch {
-      // Best-effort; user can still select-and-copy.
-    }
-  };
-
+function PairingPanel({
+  command,
+  addCommand,
+  code,
+}: {
+  command: string;
+  addCommand: string;
+  code: string;
+}) {
   return (
     <div
       style={{
@@ -123,13 +123,7 @@ function PairingPanel({ command, code }: { command: string; code: string }) {
         width: '100%',
       }}
     >
-      <div
-        style={{
-          fontSize: 11,
-          letterSpacing: '0.25em',
-          color: '#6a6660',
-        }}
-      >
+      <div style={{ fontSize: 11, letterSpacing: '0.25em', color: '#6a6660' }}>
         DESCENT CODE
       </div>
       <div
@@ -143,50 +137,120 @@ function PairingPanel({ command, code }: { command: string; code: string }) {
         {code}
       </div>
 
-      <div
+      <CommandBlock label="IN WSL — RUN" body={command} />
+
+      <details
         style={{
-          marginTop: 8,
-          fontSize: 11,
+          width: '100%',
+          maxWidth: 720,
+          fontSize: 10,
           letterSpacing: '0.2em',
           color: '#6a6660',
-        }}
-      >
-        IN WSL — RUN
-      </div>
-      <pre
-        style={{
-          margin: 0,
-          padding: '12px 16px',
-          background: 'rgba(255,255,255,0.04)',
-          border: '1px solid #2a2a2e',
-          borderRadius: 4,
-          fontSize: 11,
-          fontFamily: 'ui-monospace, Menlo, monospace',
-          color: '#a09d99',
           textAlign: 'left',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-all',
-          maxWidth: '100%',
-          lineHeight: 1.6,
         }}
       >
-        {command}
-      </pre>
-      <button
-        onClick={onCopy}
-        style={{
-          padding: '6px 14px',
-          fontSize: 10,
-          letterSpacing: '0.25em',
-          background: 'transparent',
-          color: '#a09d99',
-          border: '1px solid #3a3a3e',
-          cursor: 'pointer',
-          textTransform: 'uppercase',
-        }}
-      >
-        {copied ? 'COPIED' : 'COPY'}
-      </button>
+        <summary style={{ cursor: 'pointer', padding: '4px 0' }}>
+          NOT WORKING? TROUBLESHOOT ↓
+        </summary>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+            marginTop: 10,
+            paddingLeft: 12,
+            borderLeft: '1px solid #2a2a2e',
+            color: '#a09d99',
+            fontSize: 11,
+            letterSpacing: '0.06em',
+            lineHeight: 1.7,
+            textTransform: 'none',
+          }}
+        >
+          <div>
+            <strong style={{ color: '#d8d4cf' }}>1.</strong> Register the MCP
+            server only:
+          </div>
+          <CommandBlock body={addCommand} />
+          <div>
+            <strong style={{ color: '#d8d4cf' }}>2.</strong> Verify the
+            connection (should print OK + tool list):
+          </div>
+          <CommandBlock body="hermes mcp test sonoglyph" />
+          <div>
+            <strong style={{ color: '#d8d4cf' }}>3.</strong> Then run the
+            chat. If <code>--yolo</code> is missing, Hermes will silently
+            wait at the first tool-approval prompt in <code>-q</code> mode.
+          </div>
+          <div style={{ color: '#6a6660', fontSize: 10 }}>
+            If <code>mcp test</code> already shows AGENT PAIRED in the HUD,
+            but Hermes never makes a move during the game, your model is
+            probably refusing to call tools — try a stronger instruction or
+            switch model with <code>-m &lt;model&gt;</code>.
+          </div>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function CommandBlock({ label, body }: { label?: string; body: string }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(body);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // best-effort
+    }
+  };
+  return (
+    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {label && (
+        <div style={{ fontSize: 11, letterSpacing: '0.2em', color: '#6a6660' }}>
+          {label}
+        </div>
+      )}
+      <div style={{ position: 'relative' }}>
+        <pre
+          style={{
+            margin: 0,
+            padding: '12px 16px',
+            background: 'rgba(255,255,255,0.04)',
+            border: '1px solid #2a2a2e',
+            borderRadius: 4,
+            fontSize: 11,
+            fontFamily: 'ui-monospace, Menlo, monospace',
+            color: '#a09d99',
+            textAlign: 'left',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all',
+            maxWidth: '100%',
+            lineHeight: 1.6,
+          }}
+        >
+          {body}
+        </pre>
+        <button
+          onClick={onCopy}
+          style={{
+            position: 'absolute',
+            top: 6,
+            right: 6,
+            padding: '4px 10px',
+            fontSize: 9,
+            letterSpacing: '0.25em',
+            background: 'rgba(5,5,7,0.6)',
+            color: '#a09d99',
+            border: '1px solid #3a3a3e',
+            cursor: 'pointer',
+            textTransform: 'uppercase',
+          }}
+        >
+          {copied ? 'COPIED' : 'COPY'}
+        </button>
+      </div>
     </div>
   );
 }

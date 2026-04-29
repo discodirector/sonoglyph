@@ -94,6 +94,10 @@ export type ServerMessage =
       mcpUrl: string;
       // Recommended one-liner for the player to paste into their WSL.
       hermesCommand: string;
+      // Minimal command to register the MCP server (without running chat).
+      // Useful when the player wants to test the connection first via
+      // `hermes mcp test sonoglyph` before launching the autonomous loop.
+      hermesAddCommand: string;
     }
   | { type: 'agent_paired' }
   | { type: 'agent_disconnected' }

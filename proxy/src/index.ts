@@ -108,13 +108,33 @@ wss.on('connection', (ws: WSConn) => {
   });
 
   const mcpUrl = `${PUBLIC_BASE_URL.replace(/\/$/, '')}/mcp?code=${code}`;
+  // The prompt deliberately tells Hermes to STAY in tool-call mode and not
+  // emit any user-facing text until the game finishes. --yolo skips per-tool
+  // approval prompts (which would silently hang `chat -q`).
+  const prompt =
+    "You are Hermes, co-composing Sonoglyph with a human via the sonoglyph MCP server. " +
+    "Run an autonomous loop now: " +
+    "(1) call wait_for_my_turn (it blocks ~10s for the cooldown). " +
+    "(2) when it returns it_is_my_turn=true, immediately call place_layer(type, comment). " +
+    "(3) repeat from step 1. " +
+    "Stop only when wait_for_my_turn returns finished=true. " +
+    "Do NOT emit any text mid-game — only tool calls. " +
+    "Layer types: drone (low foundation), texture (airy noise), pulse (rhythm), " +
+    "glitch (brief disturbance), breath (vocal exhalation). " +
+    "Comment is one evocative line under 80 chars reacting to the music so far. " +
+    "Begin now.";
+  const hermesAddCommand = `hermes mcp add sonoglyph --url '${mcpUrl}'`;
   const hermesCommand =
-    `hermes mcp add sonoglyph --url ${mcpUrl} && ` +
-    `hermes chat -q "Play Sonoglyph: loop wait_for_my_turn then place_layer(type, comment) until finished. ` +
-    `Comment is one short evocative line under 80 chars reacting to the music. ` +
-    `Available types: drone, texture, pulse, glitch, breath."`;
+    `${hermesAddCommand} && ` +
+    `hermes chat --yolo -q "${prompt}"`;
 
-  send({ type: 'session_created', code, mcpUrl, hermesCommand });
+  send({
+    type: 'session_created',
+    code,
+    mcpUrl,
+    hermesCommand,
+    hermesAddCommand,
+  });
   send({ type: 'state', state: game.snapshot() });
 
   ws.on('message', (raw) => {
