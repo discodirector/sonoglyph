@@ -97,20 +97,25 @@ def build_prompt(layers):
         "No letters, no numbers, no other punctuation inside the glyph.",
         "",
         "COMPOSITION RULES — mandatory, the result must satisfy ALL:",
-        "1. Produce ALL 16 rows. Do not stop early. Every row must contain",
-        "   at least one non-space character — no blank rows.",
-        "2. Every row is UNIQUE. No two rows may share the same pattern, and",
-        "   no row may be a tiling of one repeating segment (like",
-        "   \"####|####|####|\") — that reads as wallpaper, not a glyph.",
-        "3. The glyph must visibly EVOLVE from top to bottom. Top rows are",
-        "   the surface (start of descent), bottom rows are the deep end.",
-        "   Character weight, rhythm, and the use of empty space should",
-        "   shift as you descend — not stay constant.",
-        "4. Each of the 5 bands has its OWN character palette computed from",
-        "   the layers placed in that band (see BAND PALETTES below). Draw",
-        "   each band mostly from its palette so bands feel distinct.",
-        "5. Some rows can be airy (a few marks among spaces), others can be",
-        "   denser. Mix them to create breathing room and weight.",
+        "1. The glyph has a SILHOUETTE. Different rows have different WIDTHS",
+        "   — some short, some wide, some narrow with a few marks among lots",
+        "   of empty space. Think of a sculpture, a rune, a hieroglyph; not",
+        "   a textured rectangle. The eye should see a SHAPE first, the",
+        "   detail second. A 32-char-wide block of texture every row, no",
+        "   matter how varied the chars, is FAILURE.",
+        "2. Use plenty of NEGATIVE SPACE (literal spaces). Many rows should",
+        "   have content only in the middle 8-20 columns, with empty padding",
+        "   on either side. Some rows can be very short (3-6 marks total).",
+        "3. Every row is unique. No row may be a single 1-4 character segment",
+        "   repeated across the row (no \"<>.<>.<>.\" or \"####|####|\" tiling).",
+        "4. The glyph EVOLVES from top to bottom. Top rows are the surface",
+        "   (start of descent), bottom rows are the deep end. Width, weight,",
+        "   and rhythm should shift as you descend — not stay constant.",
+        "5. Each of the 5 bands has its own character palette derived from",
+        "   the layers in that band (see BAND PALETTES below). Use the band",
+        "   palette so different bands feel distinct.",
+        "6. Produce all 16 rows; rows can be very sparse but should not be",
+        "   completely empty.",
         "",
         "NEGATIVE EXAMPLES — do NOT produce output that looks like these:",
         "",
@@ -124,25 +129,26 @@ def build_prompt(layers):
         "    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=",
         "    =.=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-",
         "",
-        "POSITIVE EXAMPLE — varied silhouette, breathing, evolving downward",
-        "(do NOT copy these characters; invent your own composition):",
+        "POSITIVE EXAMPLE — note how WIDTHS VARY row by row, lots of empty",
+        "space on the sides, breathing. (Do NOT copy these characters; invent",
+        "your own composition.):",
         "",
-        "       .   .                ",
-        "     . . +   .              ",
-        "      ..++.    .            ",
-        "     ++/\\++.   /+           ",
-        "   /+++/+\\*+++/+\\           ",
-        "   <><>../+++/+-+-+-+        ",
-        "  +++/+\\*=##|##|=#           ",
-        "  ##| ==== ##|##| ====       ",
-        "   ##|##|##|====   ===       ",
-        "    -- = - = - = - =         ",
-        "     . - = .  -  =           ",
-        "      .   |   .              ",
-        "       . . .                 ",
-        "         .                   ",
-        "         |                   ",
-        "         .                   ",
+        "          # #-                  ",
+        "             # .                ",
+        "             # . =              ",
+        "         < < < = < <            ",
+        "          > . =     = > .       ",
+        "         | =      *      + -    ",
+        "       *>/-/.  *+   - /   *=\\   ",
+        "          *=/  \\-/-  +-/+        ",
+        "          | =  /++-  +=/  |     ",
+        "       =  -=  -  -=  -=-  ==    ",
+        "       =  | =-=  =  -=  -  =    ",
+        "         - - -    |  -  =       ",
+        "          < > < > # # ##=       ",
+        "       | .  <  =  =  .=<  >     ",
+        "        .=  .=  .=  .=  .<  ><  ",
+        "        < > < >.  < >.  <  <    ",
         "",
         "BAND PALETTES (top → bottom of the glyph):",
         band_palettes,
@@ -199,13 +205,24 @@ def detect_tile_runs(s: str) -> int:
     return worst
 
 
+def _stddev(values):
+    import math as _m
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    var = sum((v - mean) ** 2 for v in values) / len(values)
+    return _m.sqrt(var)
+
+
 def score_glyph(grid: str) -> float:
     """Mirror of scoreGlyph in proxy/src/kimi.ts."""
     import math as _math
     rows = grid.split("\n")
     trimmed = [r.replace(" ", "") for r in rows]
 
-    filled_rows = sum(1 for t in trimmed if len(t) >= 4)
+    filled_rows_raw = sum(1 for t in trimmed if len(t) >= 4)
+    filled_rows = min(filled_rows_raw, 12)
+
     unique_filled = len({rows[i] for i in range(len(rows)) if len(trimmed[i]) >= 4})
 
     counts = {}
@@ -223,20 +240,30 @@ def score_glyph(grid: str) -> float:
             entropy -= p * _math.log2(p)
 
     filled_densities = [len(t) for t in trimmed if len(t) >= 4]
-    std_dev = 0.0
-    if len(filled_densities) > 1:
-        mean = sum(filled_densities) / len(filled_densities)
-        variance = sum((d - mean) ** 2 for d in filled_densities) / len(filled_densities)
-        std_dev = _math.sqrt(variance)
+    density_std_dev = _stddev(filled_densities)
+
+    # Silhouette: trimmed width per row.
+    widths = []
+    for r in rows:
+        stripped = r.rstrip()
+        if not stripped or stripped.isspace():
+            widths.append(0)
+            continue
+        # Find first and last non-space.
+        left = next(i for i, ch in enumerate(r) if ch != " ")
+        right = max(i for i, ch in enumerate(r) if ch != " ")
+        widths.append(right - left + 1)
+    silhouette_std_dev = _stddev(widths)
 
     tile_penalty = sum(detect_tile_runs(t) for t in trimmed)
 
     return (
-        filled_rows * 2.0
-        + unique_filled * 0.5
-        + entropy * 3.0
-        + std_dev * 1.0
-        - tile_penalty * 1.5
+        filled_rows * 1.0
+        + unique_filled * 0.4
+        + entropy * 2.5
+        + density_std_dev * 1.5
+        + silhouette_std_dev * 2.0
+        - tile_penalty * 1.8
     )
 
 

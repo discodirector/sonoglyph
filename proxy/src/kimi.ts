@@ -197,20 +197,25 @@ function glyphPrompt(
     'No letters, no numbers, no other punctuation inside the glyph.',
     '',
     'COMPOSITION RULES — mandatory, the result must satisfy ALL:',
-    '1. Produce ALL 16 rows. Do not stop early. Every row must contain',
-    '   at least one non-space character — no blank rows.',
-    '2. Every row is UNIQUE. No two rows may share the same pattern, and',
-    '   no row may be a tiling of one repeating segment (like',
-    '   "####|####|####|") — that reads as wallpaper, not a glyph.',
-    '3. The glyph must visibly EVOLVE from top to bottom. Top rows are',
-    '   the surface (start of descent), bottom rows are the deep end.',
-    '   Character weight, rhythm, and the use of empty space should',
-    '   shift as you descend — not stay constant.',
-    '4. Each of the 5 bands has its OWN character palette computed from',
-    '   the layers placed in that band (see BAND PALETTES below). Draw',
-    '   each band mostly from its palette so bands feel distinct.',
-    '5. Some rows can be airy (a few marks among spaces), others can be',
-    '   denser. Mix them to create breathing room and weight.',
+    '1. The glyph has a SILHOUETTE. Different rows have different WIDTHS',
+    '   — some short, some wide, some narrow with a few marks among lots',
+    '   of empty space. Think of a sculpture, a rune, a hieroglyph; not',
+    '   a textured rectangle. The eye should see a SHAPE first, the',
+    '   detail second. A 32-char-wide block of texture every row, no',
+    '   matter how varied the chars, is FAILURE.',
+    '2. Use plenty of NEGATIVE SPACE (literal spaces). Many rows should',
+    '   have content only in the middle 8-20 columns, with empty padding',
+    '   on either side. Some rows can be very short (3-6 marks total).',
+    '3. Every row is unique. No row may be a single 1-4 character segment',
+    '   repeated across the row (no "<>.<>.<>." or "####|####|" tiling).',
+    '4. The glyph EVOLVES from top to bottom. Top rows are the surface',
+    '   (start of descent), bottom rows are the deep end. Width, weight,',
+    '   and rhythm should shift as you descend — not stay constant.',
+    '5. Each of the 5 bands has its own character palette derived from',
+    '   the layers in that band (see BAND PALETTES below). Use the band',
+    '   palette so different bands feel distinct.',
+    '6. Produce all 16 rows; rows can be very sparse but should not be',
+    '   completely empty.',
     '',
     'NEGATIVE EXAMPLES — do NOT produce output that looks like these:',
     '',
@@ -224,25 +229,26 @@ function glyphPrompt(
     '    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=',
     '    =.=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-',
     '',
-    'POSITIVE EXAMPLE — varied silhouette, breathing, evolving downward',
-    '(do NOT copy these characters; invent your own composition):',
+    'POSITIVE EXAMPLE — note how WIDTHS VARY row by row, lots of empty',
+    'space on the sides, breathing. (Do NOT copy these characters; invent',
+    'your own composition.):',
     '',
-    '       .   .                ',
-    '     . . +   .              ',
-    '      ..++.    .            ',
-    '     ++/\\++.   /+           ',
-    '   /+++/+\\*+++/+\\           ',
-    '   <><>../+++/+-+-+-+        ',
-    '  +++/+\\*=##|##|=#           ',
-    '  ##| ==== ##|##| ====       ',
-    '   ##|##|##|====   ===       ',
-    '    -- = - = - = - =         ',
-    '     . - = .  -  =           ',
-    '      .   |   .              ',
-    '       . . .                 ',
-    '         .                   ',
-    '         |                   ',
-    '         .                   ',
+    '          # #-                  ',
+    '             # .                ',
+    '             # . =              ',
+    '         < < < = < <            ',
+    '          > . =     = > .       ',
+    '         | =      *      + -    ',
+    '       *>/-/.  *+   - /   *=\\   ',
+    '          *=/  \\-/-  +-/+        ',
+    '          | =  /++-  +=/  |     ',
+    '       =  -=  -  -=  -=-  ==    ',
+    '       =  | =-=  =  -=  -  =    ',
+    '         - - -    |  -  =       ',
+    '          < > < > # # ##=       ',
+    '       | .  <  =  =  .=<  >     ',
+    '        .=  .=  .=  .=  .<  ><  ',
+    '        < > < >.  < >.  <  <    ',
     '',
     'BAND PALETTES (top → bottom of the glyph):',
     bandPalettes,
@@ -353,42 +359,44 @@ function buildBandPalettes(layers: PlacedLayer[]): string {
 // Glyph quality scorer.
 //
 // We generate N glyph candidates in parallel and pick the one with the
-// highest score here. The score rewards visual variation and penalises
-// tile-like wallpaper output AND empty/short outputs. Components:
+// highest score here. The score rewards visual variation AND silhouette
+// shape, while penalising tile-like wallpaper. Components:
 //
-//   + filledRows     — rows with ≥4 non-space chars. The most important
-//                      term: a 3-row glyph cannot beat a 14-row glyph by
-//                      having higher "uniqueness ratio".
-//   + uniqueFilled   — distinct filled rows (so 16 identical rows still
-//                      score badly).
+//   + filledRows     — rows with ≥4 non-space chars (capped at 12 so a
+//                      filled rectangle doesn't beat a breathing shape).
+//   + uniqueFilled   — distinct filled rows.
 //   + charEntropy    — Shannon entropy over the non-space char distribution.
-//                      A glyph using 2 chars scores low, one using the
-//                      whole palette scores high.
-//   + densityStdDev  — std-deviation of non-space chars per row. A uniform
-//                      fill scores 0; a glyph that breathes scores higher.
-//   - tilePenalty    — sum across rows of detected repeating-segment counts.
-//                      "+#+#+#+#" gives a high penalty.
+//   + densityStdDev  — std-dev of non-space chars per filled row. Catches
+//                      "all rows same density" rectangle outputs.
+//   + silhouetteStdDev — std-dev of trimmed row WIDTH (last-first non-space
+//                       position). This is the most important signal for
+//                       "is this a glyph with a shape vs a rectangle of
+//                       textured content". A solid block scores 0 here; a
+//                       diamond/hourglass/asymmetric silhouette scores high.
+//   - tilePenalty    — sum of repeating-segment counts within rows.
+//                      "<>.<>.<>." catches as 3-char tile × N reps.
 //
-// Coefficients chosen empirically — adjustable.
+// Coefficients chosen empirically. The silhouette term carries enough
+// weight (×2.0) to overcome a "perfectly textured block" that's high on
+// entropy/uniqueness but flat on shape.
 // ---------------------------------------------------------------------------
 function scoreGlyph(grid: string): number {
   const rows = grid.split('\n');
-  const trimmed = rows.map((r) => r.replace(/\s+/g, ''));
+  const trimmedNoSpace = rows.map((r) => r.replace(/\s+/g, ''));
 
-  // 1. Filled rows — rows with real content. ≥4 non-space chars threshold
-  // dodges the degenerate "single dot" rows.
-  const filledRows = trimmed.filter((t) => t.length >= 4).length;
+  // 1. Filled rows — capped at 12. Beyond that, more filled rows shouldn't
+  // out-vote silhouette quality.
+  const filledRowsRaw = trimmedNoSpace.filter((t) => t.length >= 4).length;
+  const filledRows = Math.min(filledRowsRaw, 12);
 
-  // 2. Unique filled rows: distinct row strings among the filled ones.
-  // Use the original (with-whitespace) row so leading-space layouts count
-  // as different.
+  // 2. Unique filled rows.
   const filledSet = new Set<string>();
   for (let i = 0; i < rows.length; i++) {
-    if (trimmed[i].length >= 4) filledSet.add(rows[i]);
+    if (trimmedNoSpace[i].length >= 4) filledSet.add(rows[i]);
   }
   const uniqueFilled = filledSet.size;
 
-  // 3. Character entropy across the whole glyph.
+  // 3. Char entropy.
   const counts = new Map<string, number>();
   let total = 0;
   for (const r of rows) {
@@ -406,34 +414,51 @@ function scoreGlyph(grid: string): number {
     }
   }
 
-  // 4. Density std-dev across filled rows only — empty rows would
-  // artificially inflate it and reward sparse, half-empty glyphs.
-  const filledDensities = trimmed
+  // 4. Density std-dev across filled rows.
+  const filledDensities = trimmedNoSpace
     .filter((t) => t.length >= 4)
     .map((t) => t.length);
-  let stdDev = 0;
-  if (filledDensities.length > 1) {
-    const mean =
-      filledDensities.reduce((a, b) => a + b, 0) / filledDensities.length;
-    const variance =
-      filledDensities.reduce((a, b) => a + (b - mean) ** 2, 0) /
-      filledDensities.length;
-    stdDev = Math.sqrt(variance);
-  }
+  const densityStdDev = stddev(filledDensities);
 
-  // 5. Tile penalty.
+  // 5. Silhouette: width of each row's content envelope. A row of
+  //    "  ## . - = ##  " has trimmed width = 13 (positions 2..14).
+  //    A row of "##############################" has width = 30.
+  //    StdDev of these widths across all rows tells us if the glyph
+  //    has a shape (varies) or is a solid rectangle (constant).
+  const widths: number[] = [];
+  for (const r of rows) {
+    const left = r.search(/\S/);
+    if (left < 0) {
+      widths.push(0);
+      continue;
+    }
+    const right = r.length - 1 - r.split('').reverse().join('').search(/\S/);
+    widths.push(right - left + 1);
+  }
+  const silhouetteStdDev = stddev(widths);
+
+  // 6. Tile penalty.
   let tilePenalty = 0;
-  for (const r of trimmed) {
+  for (const r of trimmedNoSpace) {
     tilePenalty += detectTileRuns(r);
   }
 
   return (
-    filledRows * 2.0 +
-    uniqueFilled * 0.5 +
-    entropy * 3.0 +
-    stdDev * 1.0 -
-    tilePenalty * 1.5
+    filledRows * 1.0 +
+    uniqueFilled * 0.4 +
+    entropy * 2.5 +
+    densityStdDev * 1.5 +
+    silhouetteStdDev * 2.0 -
+    tilePenalty * 1.8
   );
+}
+
+function stddev(values: number[]): number {
+  if (values.length < 2) return 0;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const v =
+    values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
+  return Math.sqrt(v);
 }
 
 function detectTileRuns(s: string): number {
