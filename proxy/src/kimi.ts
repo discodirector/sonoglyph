@@ -30,9 +30,14 @@ export async function generateFinalArtifact(
   const transcript = formatTranscript(layers);
 
   try {
+    // High max_tokens because kimi-k2.6 is a reasoning model: a substantial
+    // chunk of the budget is consumed by hidden chain-of-thought before the
+    // visible `content` is emitted. With 380/700 we were watching the
+    // reasoning eat the whole window and getting empty content + finish_reason
+    // 'length'. 4000 leaves comfortable headroom.
     const [journal, glyph] = await Promise.all([
-      callKimi(apiKey, journalPrompt(transcript), 380),
-      callKimi(apiKey, glyphPrompt(transcript), 700),
+      callKimi(apiKey, journalPrompt(transcript), 4000),
+      callKimi(apiKey, glyphPrompt(transcript), 4000),
     ]);
     return {
       journal: stripFences(journal).trim(),
@@ -72,11 +77,27 @@ async function callKimi(
     throw new Error(`kimi ${res.status}: ${body.slice(0, 300)}`);
   }
   const data = (await res.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
+    choices?: Array<{
+      message?: { content?: string; reasoning_content?: string };
+      finish_reason?: string;
+    }>;
   };
-  const text = data.choices?.[0]?.message?.content;
-  if (!text) throw new Error('kimi returned empty content');
-  return text;
+  const choice = data.choices?.[0];
+  const content = choice?.message?.content?.trim();
+  if (content) return content;
+  // Reasoning models (kimi-k2.6) sometimes truncate before emitting the
+  // visible content — fall back to reasoning_content, which contains the
+  // model's pre-finalized text and is usually still answerable.
+  const reasoning = choice?.message?.reasoning_content?.trim();
+  if (reasoning) {
+    console.warn(
+      `[kimi] empty content (finish_reason=${choice?.finish_reason ?? '?'}) — using reasoning_content`,
+    );
+    return reasoning;
+  }
+  throw new Error(
+    `kimi returned empty content (finish_reason=${choice?.finish_reason ?? '?'})`,
+  );
 }
 
 // ---------------------------------------------------------------------------
