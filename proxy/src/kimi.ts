@@ -51,6 +51,10 @@ async function callKimi(
   prompt: string,
   maxTokens: number,
 ): Promise<string> {
+  // NOTE: We deliberately do NOT pass `temperature`. kimi-k2.6 rejects any
+  // value other than 1 with a 400 ("invalid temperature: only 1 is allowed
+  // for this model"), and 1 is also the default — so omitting the field is
+  // both safest and most compatible across model versions.
   const res = await fetch(`${KIMI_BASE}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -60,7 +64,6 @@ async function callKimi(
     body: JSON.stringify({
       model: KIMI_MODEL,
       messages: [{ role: 'user', content: prompt }],
-      temperature: 0.85,
       max_tokens: maxTokens,
     }),
   });
