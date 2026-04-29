@@ -8,10 +8,9 @@
 #   /health → bridge :8787
 #   else    → static frontend
 #
-# Note on directive order: `try_files` has higher priority than
-# `reverse_proxy` in Caddy's default ordering, so a top-level try_files
-# would intercept /health and /mcp before they ever reach the proxy.
-# Using `handle` blocks makes the routing explicit and source-ordered.
+# `handle` accepts a single matcher token, so we use named matchers for
+# the path lists. Without `handle`, Caddy's default directive ordering
+# would let `try_files` intercept /health and /mcp before the proxy.
 #
 # Deploy:
 #   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
@@ -20,11 +19,13 @@
 sonoglyph.xyz, www.sonoglyph.xyz {
 	encode zstd gzip
 
-	handle /ws /ws/* {
+	@ws path /ws /ws/*
+	handle @ws {
 		reverse_proxy 127.0.0.1:8787
 	}
 
-	handle /mcp /mcp/* {
+	@mcp path /mcp /mcp/*
+	handle @mcp {
 		reverse_proxy 127.0.0.1:8787 {
 			flush_interval -1
 		}
