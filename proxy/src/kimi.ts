@@ -22,7 +22,7 @@
  * deterministic fallback so the descent always ends gracefully.
  */
 
-import type { FinalArtifact, PlacedLayer } from './protocol.js';
+import type { FinalArtifact, LayerType, PlacedLayer } from './protocol.js';
 
 const KIMI_BASE = process.env.KIMI_BASE_URL ?? 'https://api.moonshot.ai/v1';
 const KIMI_MODEL = process.env.KIMI_MODEL ?? 'moonshot-v1-128k';
@@ -45,11 +45,17 @@ export async function generateFinalArtifact(
   }
 
   const transcript = formatTranscript(layers);
+  const densityMap = buildDensityMap(layers);
+  const poeticIntent = buildPoeticIntent(layers);
 
   try {
     const [journal, glyph] = await Promise.all([
       callKimi(apiKey, journalPrompt(transcript), 600),
-      callKimi(apiKey, glyphPrompt(transcript), 800),
+      callKimi(
+        apiKey,
+        glyphPrompt(transcript, densityMap, poeticIntent),
+        1000,
+      ),
     ]);
     return {
       journal: clampJournal(stripFences(journal).trim()),
@@ -152,23 +158,125 @@ function journalPrompt(transcript: string): string {
   ].join('\n');
 }
 
-function glyphPrompt(transcript: string): string {
+function glyphPrompt(
+  transcript: string,
+  densityMap: string,
+  poeticIntent: string,
+): string {
   return [
     'You are an Autoglyphs-style generative artist. Output an ASCII glyph',
-    'that visually condenses the descent below. Constraints — follow exactly:',
+    'that visually condenses the descent below.',
     '',
+    'OUTPUT CONSTRAINTS — follow exactly:',
     '- Exactly 32 columns wide, exactly 16 rows tall.',
     '- Use only these characters: space, .  -  =  +  *  #  /  \\  |  <  >',
     '- No letters, no numbers, no other punctuation.',
-    '- The composition should suggest depth and layering — denser glyphs',
-    "  toward where the music had weight, sparser where it didn't.",
+    '- Output ONLY the glyph, between two lines of exactly 32 dashes (-).',
+    '  No header, no explanation, no markdown, no fenced code block.',
     '',
-    'Output ONLY the glyph between two lines of exactly 32 dashes (`-`).',
-    'No explanation, no header, nothing else.',
+    'COMPOSITION GUIDANCE:',
+    '- Each glyph row corresponds to a depth in the descent. Row 0 is the',
+    '  surface (the first move); row 15 is the deepest (the final move).',
+    '- The DENSITY MAP below tells you how visually heavy each horizontal',
+    '  band must be. Honour it row-for-row:',
+    '    "dense"  → predominantly thick chars  (#, *, =, |, +)',
+    '    "medium" → mixed weight               (+, /, \\, <, >, =)',
+    '    "sparse" → mostly spaces and dots     (., -, single +)',
+    '- The POETIC INTENT below is what Hermes felt when placing each',
+    '  layer. Let those images bend the local shape:',
+    '    breath / exhale / mist  → soft chars  (., -, =)',
+    '    fracture / glitch / static → jagged   (/, \\, *)',
+    '    drone / floor / hum     → solid       (#, |, =)',
+    '    pulse / clock / rhythm  → rhythmic    (+, =)',
     '',
-    'Log of the descent:',
+    'DENSITY MAP (top → bottom of the glyph):',
+    densityMap,
+    '',
+    "POETIC INTENT (Hermes's reactions in placement order):",
+    poeticIntent,
+    '',
+    'Full placement log (for reference only):',
     transcript,
   ].join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Glyph context builders.
+//
+// Both functions exist so the model gets STRUCTURED hints separated from the
+// raw transcript. The glyph prompt is a 16-row visual format; the density
+// map binds each band of rows to an actual property of the partition (count
+// of "loud" types per slice). The poetic-intent block lifts Hermes's quotes
+// out of the transcript so the model treats them as form-shaping images
+// rather than journal filler.
+// ---------------------------------------------------------------------------
+
+// Layer types whose timbre tends to feel heavy on the page; the rest
+// (texture, breath) read as breath / mist / silence.
+const HEAVY_TYPES: ReadonlySet<LayerType> = new Set(['drone', 'pulse', 'glitch']);
+
+interface DensityBand {
+  index: number;          // 1..N, top → bottom
+  rowRange: string;       // e.g. "rows 0-2"
+  density: 'sparse' | 'medium' | 'dense';
+  types: LayerType[];     // types in this slice, in placement order
+}
+
+/**
+ * Slice the descent into `nBands` vertical bands and label each one with a
+ * density category and its constituent types. Layers split into bands by
+ * placement order — the first 3 are the top of the glyph, the last 3 are
+ * the bottom. The density category is the ratio of "heavy" types
+ * (drone/pulse/glitch) to the slice size.
+ */
+function computeBands(
+  layers: PlacedLayer[],
+  nBands = 5,
+  nRows = 16,
+): DensityBand[] {
+  const bands: DensityBand[] = [];
+  for (let b = 0; b < nBands; b++) {
+    const startIdx = Math.floor((b * layers.length) / nBands);
+    const endIdx = Math.floor(((b + 1) * layers.length) / nBands);
+    const slice = layers.slice(startIdx, endIdx);
+    const startRow = Math.floor((b * nRows) / nBands);
+    const endRow = Math.floor(((b + 1) * nRows) / nBands) - 1;
+    const heavy = slice.filter((l) => HEAVY_TYPES.has(l.type)).length;
+    const ratio = slice.length === 0 ? 0 : heavy / slice.length;
+    const density: DensityBand['density'] =
+      ratio >= 0.66 ? 'dense' : ratio >= 0.34 ? 'medium' : 'sparse';
+    bands.push({
+      index: b + 1,
+      rowRange: `rows ${startRow}-${endRow}`,
+      density,
+      types: slice.map((l) => l.type),
+    });
+  }
+  return bands;
+}
+
+function buildDensityMap(layers: PlacedLayer[]): string {
+  return computeBands(layers)
+    .map(
+      (b) =>
+        `- band ${b.index} (${b.rowRange.padEnd(10)}): ` +
+        `${b.density.padEnd(6)} — ${b.types.join(', ') || '(empty)'}`,
+    )
+    .join('\n');
+}
+
+function buildPoeticIntent(layers: PlacedLayer[]): string {
+  const lines = layers
+    .map((l, i) =>
+      l.comment
+        ? `- move ${String(i + 1).padStart(2, '0')} (${l.type}): "${l.comment}"`
+        : null,
+    )
+    .filter((x): x is string => x !== null);
+  if (lines.length === 0) {
+    return '(no agent comments captured — improvise form from the type sequence alone)';
+  }
+  return lines.join('\n');
 }
 
 /**
