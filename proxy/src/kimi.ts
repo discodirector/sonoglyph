@@ -168,11 +168,17 @@ function glyphPrompt(
     'that visually condenses the descent below.',
     '',
     'OUTPUT CONSTRAINTS — follow exactly:',
-    '- Exactly 32 columns wide, exactly 16 rows tall.',
+    '- Exactly 32 columns wide, exactly 16 rows tall. Count characters!',
     '- Use only these characters: space, .  -  =  +  *  #  /  \\  |  <  >',
     '- No letters, no numbers, no other punctuation.',
     '- Output ONLY the glyph, between two lines of exactly 32 dashes (-).',
     '  No header, no explanation, no markdown, no fenced code block.',
+    '',
+    'WIDTH RULER (use this to count, do NOT include it in your output):',
+    '         1111111111222222222233',
+    '1234567890123456789012345678901 2',
+    '--------------------------------',
+    'Each row of your glyph must end at the same column as the dashes.',
     '',
     'COMPOSITION GUIDANCE:',
     '- Each glyph row corresponds to a depth in the descent. Row 0 is the',
@@ -308,11 +314,49 @@ function extractGlyph(raw: string): string {
     const allowed = /^[ .\-=+*#/\\|<>]+$/;
     block = lines.filter((l) => l.length >= 8 && allowed.test(l));
   }
-  block = block
-    .slice(0, 16)
-    .map((l) => (l.length >= 32 ? l.slice(0, 32) : l.padEnd(32, ' ')));
+  block = block.slice(0, 16).map((l) => normalizeRow(l, 32));
   while (block.length < 16) block.push(' '.repeat(32));
   return block.join('\n');
+}
+
+/**
+ * Coerce a single response line into a 32-char glyph row.
+ *
+ * The model frequently misjudges width — it pads with leading spaces or
+ * runs past the 32-char target. Naive truncation (`slice(0, 32)`) silently
+ * eats meaningful glyph chars when the model left-padded; we'd see rows of
+ * empty space on screen even though the model drew something. Instead:
+ *
+ *   - Trim trailing whitespace (rarely meaningful).
+ *   - If the result is short, CENTER-pad with spaces — looks more like
+ *     a deliberate composition than a left-stuck row.
+ *   - If the result is too wide, slide a 32-char window over it and pick
+ *     the position with the most non-space characters. That preserves
+ *     the densest part of the row instead of always starting at column 0.
+ */
+function normalizeRow(raw: string, width: number): string {
+  const trimmed = raw.replace(/\s+$/, '');
+  if (trimmed.length === 0) return ' '.repeat(width);
+  if (trimmed.length === width) return trimmed;
+  if (trimmed.length < width) {
+    const left = Math.floor((width - trimmed.length) / 2);
+    const right = width - trimmed.length - left;
+    return ' '.repeat(left) + trimmed + ' '.repeat(right);
+  }
+  // Wider than the frame — find the densest 32-char window.
+  let bestStart = 0;
+  let bestScore = -1;
+  for (let s = 0; s + width <= trimmed.length; s++) {
+    let score = 0;
+    for (let i = 0; i < width; i++) {
+      if (trimmed[s + i] !== ' ') score += 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = s;
+    }
+  }
+  return trimmed.slice(bestStart, bestStart + width);
 }
 
 function stripFences(text: string): string {
