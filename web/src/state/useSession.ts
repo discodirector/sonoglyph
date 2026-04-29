@@ -68,6 +68,7 @@ export interface PairingInfo {
   mcpUrl: string;
   hermesCommand: string;
   hermesAddCommand: string;
+  hermesPrompt: string;
 }
 
 interface SessionState {

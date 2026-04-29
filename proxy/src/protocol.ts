@@ -92,12 +92,20 @@ export type ServerMessage =
       type: 'session_created';
       code: string;
       mcpUrl: string;
-      // Recommended one-liner for the player to paste into their WSL.
+      // One-liner for the player's WSL: registers the MCP server and opens
+      // an interactive `hermes chat`. Why interactive: `chat -q` closes the
+      // MCP session via DELETE after each model turn, which would tear down
+      // the agent mid-game. Interactive mode keeps the session alive for as
+      // long as the terminal is open.
       hermesCommand: string;
-      // Minimal command to register the MCP server (without running chat).
-      // Useful when the player wants to test the connection first via
-      // `hermes mcp test sonoglyph` before launching the autonomous loop.
+      // Minimal command to register the MCP server only (without launching
+      // chat). Used in the troubleshoot section so players can verify with
+      // `hermes mcp test sonoglyph`.
       hermesAddCommand: string;
+      // The prompt the player should paste into the opened `hermes chat`
+      // session as their first message. Kept separate so the player can
+      // copy it after the chat is open.
+      hermesPrompt: string;
     }
   | { type: 'agent_paired' }
   | { type: 'agent_disconnected' }

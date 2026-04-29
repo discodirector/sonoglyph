@@ -63,6 +63,7 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
         <PairingPanel
           command={pairing.hermesCommand}
           addCommand={pairing.hermesAddCommand}
+          prompt={pairing.hermesPrompt}
           code={pairing.code}
         />
       )}
@@ -106,10 +107,12 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
 function PairingPanel({
   command,
   addCommand,
+  prompt,
   code,
 }: {
   command: string;
   addCommand: string;
+  prompt: string;
   code: string;
 }) {
   return (
@@ -117,7 +120,7 @@ function PairingPanel({
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 12,
+        gap: 14,
         alignItems: 'center',
         maxWidth: 720,
         width: '100%',
@@ -137,7 +140,20 @@ function PairingPanel({
         {code}
       </div>
 
-      <CommandBlock label="IN WSL — RUN" body={command} />
+      <CommandBlock label="① IN WSL — RUN" body={command} />
+      <CommandBlock label="② PASTE INTO HERMES CHAT, THEN ENTER" body={prompt} />
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: '0.2em',
+          color: '#6a6660',
+          textAlign: 'center',
+          maxWidth: 540,
+          lineHeight: 1.7,
+        }}
+      >
+        KEEP THE WSL TERMINAL OPEN — closing it disconnects your Hermes mid-game.
+      </div>
 
       <details
         style={{

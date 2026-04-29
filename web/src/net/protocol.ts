@@ -61,6 +61,7 @@ export type ServerMessage =
       mcpUrl: string;
       hermesCommand: string;
       hermesAddCommand: string;
+      hermesPrompt: string;
     }
   | { type: 'agent_paired' }
   | { type: 'agent_disconnected' }

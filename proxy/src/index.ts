@@ -108,25 +108,27 @@ wss.on('connection', (ws: WSConn) => {
   });
 
   const mcpUrl = `${PUBLIC_BASE_URL.replace(/\/$/, '')}/mcp?code=${code}`;
-  // The prompt deliberately tells Hermes to STAY in tool-call mode and not
-  // emit any user-facing text until the game finishes. --yolo skips per-tool
-  // approval prompts (which would silently hang `chat -q`).
-  const prompt =
-    "You are Hermes, co-composing Sonoglyph with a human via the sonoglyph MCP server. " +
-    "Run an autonomous loop now: " +
+  // The prompt that the player will paste into the interactive chat as
+  // their first message. We deliberately tell Hermes to stay in tool-call
+  // mode for the whole game — and we use INTERACTIVE chat (no `-q`) so
+  // that the MCP session survives across model turns. `chat -q` sends
+  // an HTTP DELETE to /mcp the moment the model turn ends, killing the
+  // pairing mid-game.
+  const hermesPrompt =
+    "You are Hermes, co-composing Sonoglyph with me via the sonoglyph MCP server. " +
+    "Loop autonomously now: " +
     "(1) call wait_for_my_turn (it blocks ~10s for the cooldown). " +
     "(2) when it returns it_is_my_turn=true, immediately call place_layer(type, comment). " +
     "(3) repeat from step 1. " +
     "Stop only when wait_for_my_turn returns finished=true. " +
-    "Do NOT emit any text mid-game — only tool calls. " +
+    "Do not emit text between tool calls. " +
     "Layer types: drone (low foundation), texture (airy noise), pulse (rhythm), " +
     "glitch (brief disturbance), breath (vocal exhalation). " +
-    "Comment is one evocative line under 80 chars reacting to the music so far. " +
-    "Begin now.";
+    "Comment is one evocative line under 80 chars reacting to the music so far.";
   const hermesAddCommand = `hermes mcp add sonoglyph --url '${mcpUrl}'`;
-  const hermesCommand =
-    `${hermesAddCommand} && ` +
-    `hermes chat --yolo -q "${prompt}"`;
+  // One-liner: register MCP, then open INTERACTIVE chat. Player pastes the
+  // prompt as the first message and leaves the terminal open during play.
+  const hermesCommand = `${hermesAddCommand} && hermes chat --yolo`;
 
   send({
     type: 'session_created',
@@ -134,6 +136,7 @@ wss.on('connection', (ws: WSConn) => {
     mcpUrl,
     hermesCommand,
     hermesAddCommand,
+    hermesPrompt,
   });
   send({ type: 'state', state: game.snapshot() });
 

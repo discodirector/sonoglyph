@@ -58,6 +58,7 @@ export class GameSession {
 
   private listeners = new Set<Listener>();
   private cooldownTimer: NodeJS.Timeout | null = null;
+  private disconnectGrace: NodeJS.Timeout | null = null;
   private waiters: Array<() => boolean> = [];
 
   constructor(code: string) {
@@ -95,15 +96,40 @@ export class GameSession {
     return this.agentConnected;
   }
 
-  /** Called by the bridge when Hermes' MCP transport pairs to this session. */
+  /**
+   * Called by the bridge when Hermes' MCP transport pairs to this session.
+   *
+   * Disconnects use a 5-second grace period: Hermes' `chat -q` closes the
+   * MCP session via DELETE the moment the model finishes its turn, but the
+   * player will typically re-launch it (or it'll auto-loop). Without grace,
+   * the HUD bounces between AGENT PAIRED and HERMES DISCONNECTED on every
+   * tool-call cycle.
+   */
   setAgentConnected(connected: boolean): void {
-    if (this.agentConnected === connected) return;
-    this.agentConnected = connected;
-    this.broadcast({ type: connected ? 'agent_paired' : 'agent_disconnected' });
-
-    // If agent dropped out mid-game, unblock anyone waiting (they'll see the
-    // resolution as a stale state and can re-poll).
-    if (!connected) this.fireWaiters();
+    if (connected) {
+      // Cancel any pending disconnect.
+      if (this.disconnectGrace) {
+        clearTimeout(this.disconnectGrace);
+        this.disconnectGrace = null;
+      }
+      if (this.agentConnected) return;
+      this.agentConnected = true;
+      this.broadcast({ type: 'agent_paired' });
+      return;
+    }
+    // disconnect — wait briefly to see if Hermes reconnects
+    if (this.disconnectGrace) clearTimeout(this.disconnectGrace);
+    this.disconnectGrace = setTimeout(() => {
+      this.disconnectGrace = null;
+      if (!this.agentConnected) return;
+      this.agentConnected = false;
+      this.broadcast({ type: 'agent_disconnected' });
+      // Unblock anyone waiting (they'll see stale state and can re-poll).
+      this.fireWaiters();
+    }, 5_000);
+    if (typeof this.disconnectGrace.unref === 'function') {
+      this.disconnectGrace.unref();
+    }
   }
 
   /** Begin the descent. Requires the agent to be paired. */
@@ -225,7 +251,9 @@ export class GameSession {
   /** Tear down timers, drop subscribers. Used by registry GC. */
   dispose(): void {
     if (this.cooldownTimer) clearTimeout(this.cooldownTimer);
+    if (this.disconnectGrace) clearTimeout(this.disconnectGrace);
     this.cooldownTimer = null;
+    this.disconnectGrace = null;
     this.waiters.length = 0;
     this.listeners.clear();
   }

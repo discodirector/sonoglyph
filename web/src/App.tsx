@@ -99,6 +99,7 @@ export function App() {
             mcpUrl: msg.mcpUrl,
             hermesCommand: msg.hermesCommand,
             hermesAddCommand: msg.hermesAddCommand,
+            hermesPrompt: msg.hermesPrompt,
           });
           return;
         case 'agent_paired':
