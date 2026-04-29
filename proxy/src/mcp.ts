@@ -89,6 +89,23 @@ export async function handleMcpRequest(
     );
   }
 
+  // Robust handshake handling: a POST without Mcp-Session-Id is always a
+  // fresh `initialize`. If we have a cached transport from a previous
+  // client (now zombie — it has _initialized=true with a stale sessionId),
+  // a fresh initialize would fail with 400 "Server already initialized".
+  // The MCP client SDK's `close()` does not send HTTP DELETE, so our
+  // onsessionclosed callback never fires for orderly client teardowns —
+  // we cannot rely on DELETE to recycle. Drop the cached transport on
+  // every fresh POST handshake instead.
+  if (
+    request.method === 'POST' &&
+    !request.headers.get('mcp-session-id') &&
+    mcpBySession.has(code)
+  ) {
+    console.log(`[mcp ${code}] fresh handshake — recycling stale transport`);
+    disposeMcpForSession(code);
+  }
+
   let entry = mcpBySession.get(code);
   if (!entry) entry = createMcpForSession(code, game);
 
@@ -235,15 +252,21 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
     },
   );
 
-  // ---- transport (stateful: one transport reused across requests for this
-  // GameSession). Pairing to the GameSession is done at the URL layer via
-  // ?code=; the transport's own session ID is opaque to us.
+  // ---- transport (stateful: one transport per MCP session lifecycle).
   //
-  // CRITICAL: pair ONLY on a real MCP initialize handshake. Otherwise random
-  // probes (Telegram link previews, web crawlers, anything that hits /mcp
-  // with a known code) would falsely flip the "AGENT PAIRED" indicator in
-  // the browser, and the player would assume their Hermes is connected
-  // when it isn't.
+  // Pairing rule: pair the GameSession on a real MCP `initialize`. Random
+  // probes (Telegram link previews, web crawlers) hit /mcp with GET, never
+  // make it through initialize, and so don't pair.
+  //
+  // Lifecycle quirk we MUST handle: Hermes opens MCP transiently. Each of
+  // `hermes mcp add`, `hermes mcp test`, and every tool-call cycle from
+  // `hermes chat` ends with an explicit HTTP DELETE that the SDK turns
+  // into `transport.close()`. After close, the transport instance is
+  // unusable for fresh connections (it still has _initialized=true with
+  // a stale sessionId, so a fresh initialize gets rejected as 400). We
+  // therefore drop the cached entry on close so the next request mints
+  // a fresh transport. agentConnected on the GameSession is sticky — we
+  // do NOT flip it back to false on close, see GameSession.setAgentConnected.
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
     enableJsonResponse: true,
@@ -252,8 +275,15 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
       game.setAgentConnected(true);
     },
     onsessionclosed: () => {
-      console.log(`[mcp ${code}] session closed — agent disconnected`);
-      game.setAgentConnected(false);
+      console.log(
+        `[mcp ${code}] session closed — dropping transport, pairing remains`,
+      );
+      // Drop the now-zombie transport so the next request makes a fresh one.
+      const stale = mcpBySession.get(code);
+      if (stale && stale.server === server) {
+        mcpBySession.delete(code);
+        server.close().catch(() => {});
+      }
     },
   });
   server.connect(transport).catch((err) => {

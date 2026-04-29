@@ -101,8 +101,18 @@ async function main() {
       `comment="${agentLayer.layer.comment}"`,
   );
 
-  // ---- cleanup ----
+  // ---- 7. simulate Hermes lifecycle: close MCP, reconnect with same code ----
+  log('closing first MCP client (simulates `hermes mcp add` cleanup)…');
   await client.close();
+
+  log('reconnecting with same code (simulates `hermes mcp test`)…');
+  const client2 = new Client({ name: 'sonoglyph-smoke-2', version: '0.1.0' });
+  const transport2 = new StreamableHTTPClientTransport(mcpUrl);
+  await client2.connect(transport2);
+  const tools2 = await client2.listTools();
+  log(`reconnect OK — tools still visible: ${tools2.tools.map((t) => t.name).join(', ')}`);
+  await client2.close();
+
   ws.close();
   log('SMOKE OK');
   process.exit(0);
