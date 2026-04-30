@@ -1,34 +1,36 @@
+import { useState } from 'react';
 import { LAYER_TYPES, useSession } from '../state/useSession';
 import type { LayerType } from '../state/useSession';
 import { setLayerVolume } from '../audio/engine';
 
 /**
- * Mini-EQ — left side of the screen during play. Nine vertical faders, one
- * per layer type, each driving the matching per-type bus in the audio engine.
+ * Volume mixer — collapsed by default, opens above a "MIXER" toggle button
+ * in the bottom-left corner. Panel appears above the cooldown bar so it
+ * doesn't cover the preset palette underneath.
  *
- * Visually deliberately quiet: two grays, no border, tight spacing — the EQ
- * should be reachable but never compete with the orbs for attention. Colour
- * info is already carried by the orbs themselves and by the bottom palette,
- * so the mixer doesn't need to repeat it.
+ * Visually deliberately quiet: two grays, no border. Colour info is already
+ * carried by the orbs and the bottom palette, so the mixer doesn't need to
+ * repeat it.
  *
- * Why CSS `transform: rotate(-90deg)` instead of `writing-mode: vertical-lr`
- * or `appearance: slider-vertical`: the modern way still has gaps in older
- * Chromium and the legacy `slider-vertical` is non-standard and silently
- * collapses to a 16×100 *horizontal* slider in some builds. Rotating a normal
- * horizontal range slider works everywhere.
+ * Why CSS `transform: rotate(-90deg)` for the faders instead of
+ * `writing-mode: vertical-lr` or `appearance: slider-vertical`: the modern
+ * way still has gaps in older Chromium and the legacy `slider-vertical`
+ * silently collapses to a 16×100 *horizontal* slider in some builds.
+ * Rotating a normal horizontal range slider works everywhere.
  *
- * State of truth: useSession.layerVolumes. The setter both updates the store
- * and pokes setLayerVolume on the engine, which ramps the bus gain over 50ms.
+ * State of truth: useSession.layerVolumes. Setter updates the store and
+ * pokes setLayerVolume on the engine, which ramps the bus gain over 50ms.
+ * Open/closed state is local to this component — no need to persist; the
+ * volumes themselves do persist across toggles.
  */
 
-// Two grays from the project palette. TRACK paints the slider accent (track
-// + thumb); LABEL is for the type abbreviation, the percent readout, and the
-// "MIX" header. Muted channels just dim via opacity — we don't introduce a
-// third colour for that state.
+// Two grays from the project palette. TRACK paints the slider accent;
+// LABEL is for the type abbreviation, the percent readout, and the "MIX"
+// header. Muted channels just dim via opacity — no third colour needed.
 const TRACK_GRAY = '#aab0a8';
 const LABEL_GRAY = '#6a6660';
 
-// 3-letter abbreviations so the column stays narrow. Full type name appears
+// 3-letter abbreviations so columns stay narrow. Full type name appears
 // in the slider's title attribute (native tooltip on hover).
 const SHORT: Record<LayerType, string> = {
   drone: 'DRO',
@@ -49,58 +51,102 @@ export function Mixer() {
   const phase = useSession((s) => s.phase);
   const volumes = useSession((s) => s.layerVolumes);
   const setVol = useSession((s) => s.setLayerVolume);
+  const [open, setOpen] = useState(false);
 
   if (phase !== 'playing') return null;
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        left: 16,
-        top: '50%',
-        transform: 'translateY(-50%)',
-        // Explicit z-index so we always paint above the R3F <canvas>
-        // (which is also `position: fixed; inset: 0`) and the Hud's
-        // mixBlendMode container.
-        zIndex: 20,
-        pointerEvents: 'auto',
-        color: '#d8d4cf',
-        padding: '10px 10px 8px',
-        background: 'rgba(5,5,7,0.55)',
-        // Border removed — the panel reads as a soft dark patch, not a
-        // framed box.
-        backdropFilter: 'blur(2px)',
-        WebkitBackdropFilter: 'blur(2px)',
-      }}
-    >
+    <>
+      {/* Panel — always mounted so we can animate the transition. When
+          closed: faded out + nudged downward + pointer-events disabled so
+          it doesn't catch clicks invisibly. Bottom 90px clears the
+          ~74px-tall bottom palette and the 14px top-padding above the
+          cooldown bar. */}
       <div
         style={{
-          fontSize: 9,
-          letterSpacing: '0.35em',
-          color: LABEL_GRAY,
-          textAlign: 'center',
-          marginBottom: 8,
+          position: 'fixed',
+          left: 16,
+          bottom: 90,
+          zIndex: 20,
+          pointerEvents: open ? 'auto' : 'none',
+          opacity: open ? 1 : 0,
+          transform: open ? 'translateY(0)' : 'translateY(8px)',
+          transition: 'opacity 180ms ease, transform 180ms ease',
+          color: '#d8d4cf',
+          padding: '10px 10px 8px',
+          background: 'rgba(5,5,7,0.72)',
+          backdropFilter: 'blur(3px)',
+          WebkitBackdropFilter: 'blur(3px)',
         }}
       >
-        MIX
+        <div
+          style={{
+            fontSize: 9,
+            letterSpacing: '0.35em',
+            color: LABEL_GRAY,
+            textAlign: 'center',
+            marginBottom: 8,
+          }}
+        >
+          MIX
+        </div>
+        {/* gap: 3 — neighbouring centres land 27px apart without label
+            collisions. */}
+        <div style={{ display: 'flex', gap: 3 }}>
+          {LAYER_TYPES.map((t) => (
+            <Channel
+              key={t}
+              type={t}
+              value={volumes[t] ?? 1}
+              onChange={(v) => {
+                setVol(t, v);
+                setLayerVolume(t, v);
+              }}
+            />
+          ))}
+        </div>
       </div>
-      {/* gap: 3 (down from 6) — half the previous spacing without letting
-          the labels under each fader collide. Column width is 24, so neighbour
-          centres land 27px apart. */}
-      <div style={{ display: 'flex', gap: 3 }}>
-        {LAYER_TYPES.map((t) => (
-          <Channel
-            key={t}
-            type={t}
-            value={volumes[t] ?? 1}
-            onChange={(v) => {
-              setVol(t, v);
-              setLayerVolume(t, v);
-            }}
-          />
-        ))}
-      </div>
-    </div>
+
+      {/* Toggle button — bottom-left corner, height matches the preset
+          palette row. Higher z-index than the panel so it stays clickable
+          if the panel ever expands over it. */}
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title="Volume mixer"
+        style={{
+          position: 'fixed',
+          left: 16,
+          bottom: 28,
+          zIndex: 21,
+          pointerEvents: 'auto',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 12px',
+          background: open ? LABEL_GRAY : 'transparent',
+          color: open ? '#050507' : '#d8d4cf',
+          border: `1px solid ${open ? LABEL_GRAY : '#3a3a3e'}`,
+          letterSpacing: '0.15em',
+          fontSize: 11,
+          textTransform: 'uppercase',
+          cursor: 'pointer',
+          transition: 'background 120ms ease, color 120ms ease',
+          fontFamily: 'inherit',
+        }}
+      >
+        <span>MIXER</span>
+        <span
+          style={{
+            fontSize: 9,
+            display: 'inline-block',
+            transition: 'transform 180ms ease',
+            transform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+          }}
+        >
+          ▲
+        </span>
+      </button>
+    </>
   );
 }
 
