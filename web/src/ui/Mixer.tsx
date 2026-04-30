@@ -65,7 +65,11 @@ export function Mixer() {
       <div
         style={{
           position: 'fixed',
-          left: 16,
+          // Aligned with the left edge of the cooldown bar inside the bottom
+          // palette (which has horizontal padding 24). The button below
+          // shares this offset so the two stack as a clean column under
+          // the loading line.
+          left: 24,
           bottom: 90,
           zIndex: 20,
           pointerEvents: open ? 'auto' : 'none',
@@ -115,7 +119,7 @@ export function Mixer() {
         title="Volume mixer"
         style={{
           position: 'fixed',
-          left: 16,
+          left: 24,
           bottom: 28,
           zIndex: 21,
           pointerEvents: 'auto',
