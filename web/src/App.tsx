@@ -8,10 +8,12 @@ import { LAYER_TYPES, useSession } from './state/useSession';
 import {
   addLayer,
   captureSpectrum,
+  fadeOutMaster,
   initAudio,
   pickFreqForType,
   setGlobalDepth,
   startRecording,
+  stopRecording,
 } from './audio/engine';
 import { openBridge, type BridgeConnection } from './net/client';
 
@@ -29,9 +31,12 @@ export function App() {
   const phase = useSession((s) => s.phase);
   const depth = useSession((s) => s.depth);
   const agentConnected = useSession((s) => s.agentConnected);
+  const layersCount = useSession((s) => s.layers.length);
+  const maxLayers = useSession((s) => s.maxLayers);
   const beginLocal = useSession((s) => s.beginLocal);
   const setProxyOk = useSession((s) => s.setProxyOk);
   const setRecording = useSession((s) => s.setRecording);
+  const setRecordingBlob = useSession((s) => s.setRecordingBlob);
   const setSelectedPreset = useSession((s) => s.setSelectedPreset);
   const pushEvent = useSession((s) => s.pushEvent);
   const applySessionCreated = useSession((s) => s.applySessionCreated);
@@ -43,6 +48,10 @@ export function App() {
 
   const bridgeRef = useRef<BridgeConnection | null>(null);
   const layerHandlesRef = useRef<Map<string, () => void>>(new Map());
+  // Guards against re-firing if React replays the effect (e.g. after an
+  // applySnapshot that re-asserts the already-final layer count, or HMR
+  // in dev). Once we've armed the outro, that's it.
+  const outroTriggeredRef = useRef(false);
 
   // Health check (proxy reachability indicator).
   useEffect(() => {
@@ -83,6 +92,43 @@ export function App() {
     }, 5000);
     return () => window.clearInterval(interval);
   }, [phase, pushEvent]);
+
+  // ---------------------------------------------------------------------------
+  // Outro: fade audio + close out the recording, 10 s after the descent's
+  // final orb lands.
+  //
+  // Why this lives here and not on phase==='finished': the server flips us
+  // to 'finished' only AFTER Kimi has composed the journal+glyph, which can
+  // take 5-30 s. We want the fade to start at the actual end of play, so we
+  // trigger on layer count instead — the moment `layers.length === maxLayers`
+  // is the moment "the player placed the last orb" regardless of whose turn
+  // it was or whether the artifact has rolled in yet.
+  //
+  // Timing:
+  //   t=0     fadeOutMaster(8) — masterMix.gain ramps to 0 over 8 s. Both
+  //           the speakers and the recorder tap here, so what the player
+  //           hears IS what gets baked into the WebM.
+  //   t=8-10  silence + reverb tail decaying upstream of the fade. These
+  //           two seconds of clean tail keep the recording from ending on
+  //           a hot sample mid-fade.
+  //   t=10    stopRecording(). Tone.Recorder finalizes the WebM blob.
+  //           setRecordingBlob() drops it in the store for the IPFS step
+  //           to pick up.
+  useEffect(() => {
+    if (outroTriggeredRef.current) return;
+    if (layersCount === 0) return;
+    if (layersCount < maxLayers) return;
+    outroTriggeredRef.current = true;
+
+    fadeOutMaster(8);
+    const timer = window.setTimeout(async () => {
+      const blob = await stopRecording();
+      if (blob) setRecordingBlob(blob);
+      setRecording(false);
+    }, 10_000);
+
+    return () => window.clearTimeout(timer);
+  }, [layersCount, maxLayers, setRecordingBlob, setRecording]);
 
   // ---------------------------------------------------------------------------
   // Open the bridge on mount — well before Begin. We need the code to

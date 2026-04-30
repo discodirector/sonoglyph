@@ -95,6 +95,10 @@ interface SessionState {
   layerVolumes: Record<LayerType, number>;
   proxyOk: boolean | null;
   recording: boolean;
+  /** Captured WebM of the full descent. Set once Tone.Recorder stops at
+   *  the end of the outro fade; consumed by the IPFS pinning step before
+   *  the on-chain mint. Null until then. */
+  recordingBlob: Blob | null;
   startedAt: number | null;
   log: SessionEvent[];
 
@@ -119,6 +123,7 @@ interface SessionState {
   setLayerVolume: (t: LayerType, value: number) => void;
   setProxyOk: (ok: boolean) => void;
   setRecording: (r: boolean) => void;
+  setRecordingBlob: (b: Blob | null) => void;
   pushEvent: (e: PendingEvent) => void;
 }
 
@@ -141,6 +146,7 @@ export const useSession = create<SessionState>((set) => ({
   >,
   proxyOk: null,
   recording: false,
+  recordingBlob: null,
   startedAt: null,
   log: [],
 
@@ -209,6 +215,7 @@ export const useSession = create<SessionState>((set) => ({
     set((s) => ({ layerVolumes: { ...s.layerVolumes, [t]: value } })),
   setProxyOk: (ok) => set({ proxyOk: ok }),
   setRecording: (r) => set({ recording: r }),
+  setRecordingBlob: (b) => set({ recordingBlob: b }),
   pushEvent: (e) =>
     set((s) => ({
       log: [...s.log, { ...e, t: relTime(s.startedAt) } as SessionEvent],

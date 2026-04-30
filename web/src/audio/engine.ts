@@ -254,6 +254,25 @@ export async function stopRecording(): Promise<Blob | null> {
   return blob;
 }
 
+/**
+ * Outro fade. Ramps the final summing-point gain (`masterMix`) toward zero
+ * over `durationSec`, with a Tone.js `rampTo` (exponentialApproachTo under
+ * the hood — natural-sounding tail rather than a linear ramp).
+ *
+ * masterMix is the node the recorder taps, so this single ramp simultaneously
+ * fades what the player hears AND what gets baked into the WebM blob — no
+ * separate ramps on layer buses, voice, or reverb. Reverb tail keeps decaying
+ * during and after the fade since its tail lives upstream in the dry path.
+ *
+ * Cancels any prior schedule on the param so callers can re-arm or shorten
+ * the fade without leftover automation fighting the new value.
+ */
+export function fadeOutMaster(durationSec: number): void {
+  if (!initialized) return;
+  masterMix.gain.cancelScheduledValues(Tone.now());
+  masterMix.gain.rampTo(0, Math.max(0.05, durationSec));
+}
+
 // -----------------------------------------------------------------------------
 // Layer factory — nine presets.
 // -----------------------------------------------------------------------------
