@@ -4,9 +4,7 @@ import {
   CanvasTexture,
   ExtrudeGeometry,
   type Group,
-  type InstancedMesh,
   type Mesh,
-  Object3D,
   PlaneGeometry,
   type Points,
   Shape,
@@ -20,13 +18,11 @@ import type { LayerType, PlacedLayer } from '../state/useSession';
  * animation are all keyed off `layer.type`. Three types break out of that
  * pattern because their visual identity demands more than one drawcall:
  *
- *   - `texture` — a slightly bumpy plane with 28 small triangular pyramids
- *     (cones with radialSegments=3) protruding along its normal. The
- *     plane itself has flat-shaded random Z-displacement so it reads as
- *     a mineral surface; the pyramids look like crystals erupting
- *     through it. Whole group oscillates so the relief is seen from a
- *     changing angle. Per-spike phase + occasional sharp twitches give
- *     it the same kind of jittery noise vocabulary as glitch/bell.
+ *   - `texture` — a slightly bumpy plane (20×20 subdivisions with
+ *     jittered Z-displacement and flatShading so it reads as a
+ *     mineral/foil surface). Whole plane oscillates ±0.4 rad on X/Y so
+ *     the camera sees the relief from a changing angle. A radial alpha
+ *     map fades the edges into the void.
  *
  *   - `pulse` — a wide outer ring + an extruded heart at its centre.
  *     The heart pulses with a lub-dub heartbeat synced loosely to the
@@ -204,7 +200,7 @@ function SingleOrb({ layer }: { layer: PlacedLayer }) {
           <Geometry type={layer.type} />
           <Material type={layer.type} />
         </mesh>
-        <NoiseAura type="drone" radius={1.1} />
+        <NoiseAura type="drone" radius={0.45} count={70} size={0.03} />
       </group>
     );
   }
@@ -320,32 +316,25 @@ function animateByType(mesh: Mesh, layer: PlacedLayer, t: number) {
 }
 
 // ---------------------------------------------------------------------------
-// TEXTURE — bumpy plane with triangular spikes.
+// TEXTURE — bumpy plane (no spikes).
 //
-// Two pieces share one parent group:
+// A 20×20-subdivided plane (1.7² units) whose vertex Z values have been
+// jittered ±0.012. Combined with flatShading, every triangle on the plane
+// catches light at a slightly different angle — the surface reads as
+// faceted/rough, like crinkled foil or mineral schist. A radial alpha map
+// fades the plane to fully transparent at its edges, so the silhouette is
+// a soft amorphous patch rather than a hard square boundary against the
+// void.
 //
-//   1. A 20×20-subdivided plane (1.7² units) whose vertex Z values have
-//      been jittered ±0.012. Combined with `flatShading`, every triangle
-//      on the plane catches light at a slightly different angle — the
-//      surface reads as faceted/rough, like crinkled foil or mineral
-//      schist. A radial alpha map fades the plane to fully transparent
-//      at its edges, so the silhouette is a soft amorphous patch rather
-//      than a hard square boundary against the void.
+// The plane oscillates ±0.4 rad on X (heavily biased to a steep angle so
+// the relief is visible) and ±0.55 rad on Y, on slow sine waves. The
+// changing angle is what makes the micro-relief readable; a static plane
+// would just look like a flat patch.
 //
-//   2. 28 instanced cones with `radialSegments=3` (= triangular pyramids)
-//      protruding from the plane along its +Z normal. Each spike's base
-//      is recessed by the plane's max displacement so it can never
-//      visually lift off the surface (an earlier version had spikes
-//      "floating" when they stood over a valley vertex). Heights vary
-//      [0.6, 1.3] for an irregular skyline. Each pyramid breathes in
-//      height with its own phase. ~0.25% per frame any pyramid can
-//      "twitch" — a smooth sine bell over 600ms with peak amplitude
-//      0.15–0.4. This is much gentler than the v1 attempt (1%/frame,
-//      150ms linear decay, peak 1.0) which produced visible spasms.
-//
-// The whole group oscillates ±0.4 rad on X/Y on slow sine waves so the
-// camera never sees the plane straight-on for long; the changing angle
-// is what makes the spike profile readable against the negative space.
+// An earlier version of this orb had 28 instanced triangular pyramids
+// erupting from the plane. They were dropped because the spikes pulled
+// attention away from the surface itself and read as "decoration on a
+// plane" rather than letting the plane be the texture.
 // ---------------------------------------------------------------------------
 
 // Sized to roughly match the visual footprint of the other layer types
@@ -353,35 +342,12 @@ function animateByType(mesh: Mesh, layer: PlacedLayer, t: number) {
 // "small grey patches" at typical descent distances.
 const TEXTURE_PLANE_SIZE = 1.7;
 const TEXTURE_PLANE_SUBDIV = 20;
-// Fewer but individually larger spikes — at 38 small spikes on a 1.7-square
-// plane the silhouette read as static fuzz; at 28 chunky spikes you can
-// actually count each triangular crystal poking through the surface.
-const TEXTURE_SPIKE_COUNT = 28;
-const TEXTURE_SPIKE_BASE_HEIGHT = 0.42; // geometry height before per-instance scale
-
-interface TextureSpike {
-  x: number;
-  y: number;
-  /** Per-instance height base in [0.6, 1.3]; varies the skyline. */
-  heightBase: number;
-  /** Z-axis spin (around the spike's own axis, after rotating it upright). */
-  rotZ: number;
-  /** Phase offset for the breathing animation so spikes don't pulse in unison. */
-  phase: number;
-  /** Twitch state — start time and end time of the current twitch (if active). */
-  twitchStart: number;
-  twitchEnd: number;
-  twitchAmount: number;
-}
-
-/** Maximum absolute Z-displacement applied to plane vertices. Used to recess
- *  spike bases far enough that no random plane bump can lift them out. */
+/** Maximum absolute Z-displacement applied to plane vertices. Small enough
+ *  to read as crinkle, not as terrain. */
 const TEXTURE_PLANE_DISPLACE = 0.012;
 
 function TextureSurface({ layer }: { layer: PlacedLayer }) {
   const groupRef = useRef<Group>(null);
-  const spikesRef = useRef<InstancedMesh>(null);
-  const dummy = useMemo(() => new Object3D(), []);
 
   // Bumpy plane — built once per layer. PlaneGeometry has its vertices on
   // a regular grid; we displace each Z by a small random amount and let
@@ -394,8 +360,6 @@ function TextureSurface({ layer }: { layer: PlacedLayer }) {
       TEXTURE_PLANE_SUBDIV,
     );
     const pos = g.attributes.position;
-    // Small displacement so the plane reads as faceted but spikes don't
-    // appear to lift off it when they sit over a "valley" vertex.
     for (let i = 0; i < pos.count; i++) {
       pos.setZ(i, (Math.random() - 0.5) * 2 * TEXTURE_PLANE_DISPLACE);
     }
@@ -437,74 +401,15 @@ function TextureSurface({ layer }: { layer: PlacedLayer }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer.id]);
 
-  const spikes = useMemo<TextureSpike[]>(() => {
-    return Array.from({ length: TEXTURE_SPIKE_COUNT }, () => ({
-      // With the radial alpha map, the plane fades to transparent past
-      // ~0.7 of its half-extent. Keep spikes inside that bright core
-      // (radius ≈ 0.6) so they always sit on visible plane.
-      x: (Math.random() - 0.5) * TEXTURE_PLANE_SIZE * 0.6,
-      y: (Math.random() - 0.5) * TEXTURE_PLANE_SIZE * 0.6,
-      // Tighter range than before — old spread (0.4–1.4) made twitches
-      // on the tallest spikes look comically aggressive.
-      heightBase: 0.6 + Math.random() * 0.7,
-      rotZ: Math.random() * Math.PI * 2,
-      phase: Math.random() * Math.PI * 2,
-      twitchStart: 0,
-      twitchEnd: 0,
-      twitchAmount: 0,
-    }));
-  }, [layer.id]);
-
   useFrame((s) => {
     const t = s.clock.elapsedTime;
-
+    if (!groupRef.current) return;
     // Slow oscillating tilt — heavily biased so the plane is mostly seen
     // at a steep angle. At rotation.x ≈ -0.7 rad (~40°) the plane is
-    // almost a parallelogram in screen space and the spikes silhouette
-    // crisply against the void above. Going more horizontal would make
-    // the spikes brighter against negative space but the plane itself
-    // loses readability; -0.7±0.4 keeps both visible.
-    if (groupRef.current) {
-      groupRef.current.rotation.x = -0.7 + Math.sin(t * 0.18) * 0.4;
-      groupRef.current.rotation.y = Math.sin(t * 0.13) * 0.55;
-    }
-
-    if (!spikesRef.current) return;
-
-    for (let i = 0; i < TEXTURE_SPIKE_COUNT; i++) {
-      const sp = spikes[i];
-      // Roll a twitch — much rarer + smaller than the v1 attempt. Old
-      // values (0.6%/frame, amplitude up to 1.0×, 150ms linear decay)
-      // produced visible "spasms" where a single spike doubled in height
-      // for two frames. Now: ~0.25%/frame, amp 0.15–0.4, 600ms smooth
-      // sine envelope so the boost rises and falls instead of popping.
-      if (Math.random() < 0.0025 && t > sp.twitchEnd) {
-        sp.twitchStart = t;
-        sp.twitchEnd = t + 0.6;
-        sp.twitchAmount = 0.15 + Math.random() * 0.25;
-      }
-      let twitchBoost = 0;
-      if (t >= sp.twitchStart && t < sp.twitchEnd) {
-        const phase = (t - sp.twitchStart) / (sp.twitchEnd - sp.twitchStart);
-        twitchBoost = sp.twitchAmount * Math.sin(phase * Math.PI);
-      }
-      // Smooth breathing wave + rare gentle twitch boost.
-      const breathe = 0.7 + Math.sin(t * 1.0 + sp.phase) * 0.3;
-      const heightMul = sp.heightBase * (breathe + twitchBoost);
-      const halfH = (TEXTURE_SPIKE_BASE_HEIGHT * heightMul) / 2;
-
-      // Cone default axis is +Y. Rx(+PI/2) sends apex to +Z (toward camera
-      // through the plane normal); the Z rotation just spins the pyramid
-      // around its own axis. Position.z = halfH - DISPLACE recesses the
-      // base by exactly the plane's max bump so even a spike standing
-      // over a "valley" vertex never appears to float above the surface.
-      dummy.position.set(sp.x, sp.y, halfH - TEXTURE_PLANE_DISPLACE);
-      dummy.rotation.set(Math.PI / 2, 0, sp.rotZ);
-      dummy.scale.set(1, heightMul, 1);
-      dummy.updateMatrix();
-      spikesRef.current.setMatrixAt(i, dummy.matrix);
-    }
-    spikesRef.current.instanceMatrix.needsUpdate = true;
+    // almost a parallelogram in screen space and the micro-relief is
+    // clearly visible against the void.
+    groupRef.current.rotation.x = -0.7 + Math.sin(t * 0.18) * 0.4;
+    groupRef.current.rotation.y = Math.sin(t * 0.13) * 0.55;
   });
 
   const p = PALETTE.texture;
@@ -521,29 +426,9 @@ function TextureSurface({ layer }: { layer: PlacedLayer }) {
           flatShading
           alphaMap={planeAlphaMap}
           transparent
-          // Don't write to the depth buffer — transparent pixels would
-          // otherwise occlude the spikes whose bases sit just below the
-          // plane surface, causing weird halos around the spike roots.
           depthWrite={false}
         />
       </mesh>
-      <instancedMesh
-        ref={spikesRef}
-        args={[undefined, undefined, TEXTURE_SPIKE_COUNT]}
-      >
-        {/* radialSegments=3 → triangular pyramid (3 lateral triangles + base).
-            Wider base radius (0.09) makes each face of the pyramid large
-            enough to read at descent distances. */}
-        <coneGeometry args={[0.09, TEXTURE_SPIKE_BASE_HEIGHT, 3]} />
-        <meshStandardMaterial
-          emissive={p.emissive}
-          emissiveIntensity={p.intensity * 1.5}
-          color={p.color}
-          roughness={0.4}
-          metalness={0.3}
-          flatShading
-        />
-      </instancedMesh>
     </group>
   );
 }
@@ -634,12 +519,12 @@ function PulseHeart({ layer }: { layer: PlacedLayer }) {
 
   return (
     <group ref={groupRef} position={layer.position}>
-      {/* Dust aura — fine specks framing the ring and heart so pulse reads
-          as "throbbing in a haze" rather than "geometric arrangement". The
-          shell sits just outside the ring radius (0.85) so dust hangs
-          around the cluster without occluding it. Rotates with the group's
-          slow Z spin so the whole thing feels like a single living object. */}
-      <NoiseAura type="pulse" radius={1.2} />
+      {/* Dust aura — fine specks tightly clustered around the heart at the
+          centre of the ring, so pulse reads as "throbbing in a haze". Shell
+          radius 0.45 sits inside the ring (0.85) and around the heart
+          (~0.4 wide). Rotates with the group's slow Z spin so the whole
+          thing feels like a single living object. */}
+      <NoiseAura type="pulse" radius={0.45} count={70} size={0.03} />
       {/* Outer ring — thin, wide, frames the heart */}
       <mesh ref={outerRef}>
         <torusGeometry args={[0.85, 0.025, 8, 48]} />
