@@ -695,8 +695,7 @@ function buildSwell(freq: number): PresetBuild {
 
 function buildChord(rootFreq: number): PresetBuild {
   // Three sine partials: root, perfect fifth (×1.5), octave (×2). Slow attack
-  // so the chord opens like a window rather than punching in. Shared envelope
-  // keeps the parts coherent.
+  // so the chord opens like a window rather than punching in.
   const root = new Tone.Oscillator({ frequency: rootFreq, type: 'sine' });
   const fifth = new Tone.Oscillator({
     frequency: rootFreq * 1.5,
@@ -719,20 +718,46 @@ function buildChord(rootFreq: number): PresetBuild {
   // Soft lowpass to prevent the upper octave from getting shrill.
   const lp = new Tone.Filter({ frequency: 1800, type: 'lowpass', Q: 0.7 });
   sum.connect(lp);
-  const out = new Tone.Gain(0);
-  lp.connect(out);
+
+  // Earlier the chord's gain ramped to 0.13 and then sustained forever —
+  // one chord was fine, but two or three placed turned the descent into
+  // a harmonic-pad drone and the tense minimalism got lost. Now a slow
+  // LFO breathes the gain through 0..0.14 on a 24-second period so each
+  // chord swells in (~6s), peaks, fades (~6s), and emerges again rather
+  // than humming on indefinitely. Phase 270° starts the LFO at min=0 so
+  // the chord arrives silently rather than punching in halfway through
+  // its first swell.
+  //
+  // Two Gain stages because a single LFO-driven gain can't be smoothly
+  // rampToed to 0 on dispose (the LFO sums with the intrinsic value, so
+  // ramping intrinsic to 0 doesn't silence LFO output). outDriven is the
+  // LFO target; outFinal is a normal AudioParam we ramp down on dispose.
+  const outDriven = new Tone.Gain(0);
+  lp.connect(outDriven);
+  const breathe = new Tone.LFO({
+    frequency: 1 / 24, // 24-second period
+    min: 0,
+    max: 0.14,
+    type: 'sine',
+    phase: 270,
+  }).start();
+  breathe.connect(outDriven.gain);
+
+  const outFinal = new Tone.Gain(1);
+  outDriven.connect(outFinal);
+
   root.start();
   fifth.start();
   oct.start();
-  out.gain.rampTo(0.13, 7);
 
   return {
-    output: out,
+    output: outFinal,
     freq: rootFreq,
     dispose: () => {
-      out.gain.rampTo(0, 3);
+      outFinal.gain.rampTo(0, 3);
       window.setTimeout(() => {
         try {
+          breathe.stop().dispose();
           root.stop().dispose();
           fifth.stop().dispose();
           oct.stop().dispose();
@@ -740,7 +765,8 @@ function buildChord(rootFreq: number): PresetBuild {
           octGain.dispose();
           sum.dispose();
           lp.dispose();
-          out.dispose();
+          outDriven.dispose();
+          outFinal.dispose();
         } catch {
           /* already disposed */
         }
