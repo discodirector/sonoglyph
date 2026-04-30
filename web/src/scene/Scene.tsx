@@ -24,6 +24,12 @@ import { LayerOrb } from './Layer';
  * listener glued to it for spatial panning.
  *
  * Pacing: ~6 minutes total descent → ~2.78 units/sec.
+ *
+ * Pitch: lookAt (0, -9.2, -10) → atan2(9.2, 10) ≈ 42.6° below horizon.
+ * Combined with 70° vertical FOV the frustum sweeps from -77.6° to -7.6°,
+ * so most of what's rendered is *below* the camera — the rings, dust, and
+ * glyph stream all sit in the productive part of the frame as we fall
+ * past them, which sells the descent better than a near-horizontal gaze.
  */
 function DescentCamera() {
   const camera = useThree((s) => s.camera);
@@ -32,7 +38,7 @@ function DescentCamera() {
 
   useEffect(() => {
     camera.position.set(0, 0, 0);
-    camera.lookAt(0, -8, -10);
+    camera.lookAt(0, -9.2, -10);
   }, [camera]);
 
   useFrame((_, delta) => {
