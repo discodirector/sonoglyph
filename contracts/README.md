@@ -4,6 +4,16 @@ ERC-721 of completed Sonoglyph descents. Fully on-chain rendering of glyph
 + journal (audio lives on IPFS via Pinata, referenced by CID in
 `animation_url`).
 
+## Deployed
+
+| Network        | Chain ID | Address |
+|----------------|----------|---------|
+| Monad testnet  | 10143    | [`0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931`](https://testnet.monadexplorer.com/address/0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931) |
+
+Owner / sole minter: `0x331d5F69d188b1A37B0b1D6dd058f76b52e4457b` — the
+bridge wallet, used by `proxy/` to sign mint transactions on the player's
+behalf. First mint (smoke test) lives at tokenId `1`.
+
 ## Layout
 
 ```
