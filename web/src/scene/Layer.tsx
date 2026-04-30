@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import {
+  CanvasTexture,
   ExtrudeGeometry,
   type Group,
   type InstancedMesh,
@@ -195,25 +196,28 @@ function animateByType(mesh: Mesh, layer: PlacedLayer, t: number) {
 //
 // Two pieces share one parent group:
 //
-//   1. A 16×16-subdivided plane (0.85×0.85 units) whose vertex Z values
-//      have been jittered ±0.012. Combined with `flatShading`, every
-//      triangle on the plane catches light at a slightly different angle
-//      — the surface reads as faceted/rough, like crinkled foil or
-//      mineral schist. The displacement is small enough that the silhouette
-//      stays planar; the texture lives in the lighting, not in the outline.
+//   1. A 20×20-subdivided plane (1.7² units) whose vertex Z values have
+//      been jittered ±0.012. Combined with `flatShading`, every triangle
+//      on the plane catches light at a slightly different angle — the
+//      surface reads as faceted/rough, like crinkled foil or mineral
+//      schist. A radial alpha map fades the plane to fully transparent
+//      at its edges, so the silhouette is a soft amorphous patch rather
+//      than a hard square boundary against the void.
 //
-//   2. 38 instanced cones with `radialSegments=3` (= triangular pyramids)
-//      protruding from the plane along its +Z normal. Heights randomized
-//      across [0.06, 0.20] so the spikes form a varied skyline rather
-//      than a uniform brush. Each pyramid breathes in height with its
-//      own phase, and any pyramid has a small chance per frame to "twitch"
-//      — height jumps for ~150ms then relaxes. The twitch is the same
-//      noise idea as glitch's 4% snap, dialed down to ~0.6% so the
-//      surface mostly looks calm with occasional sparks.
+//   2. 28 instanced cones with `radialSegments=3` (= triangular pyramids)
+//      protruding from the plane along its +Z normal. Each spike's base
+//      is recessed by the plane's max displacement so it can never
+//      visually lift off the surface (an earlier version had spikes
+//      "floating" when they stood over a valley vertex). Heights vary
+//      [0.6, 1.3] for an irregular skyline. Each pyramid breathes in
+//      height with its own phase. ~0.25% per frame any pyramid can
+//      "twitch" — a smooth sine bell over 600ms with peak amplitude
+//      0.15–0.4. This is much gentler than the v1 attempt (1%/frame,
+//      150ms linear decay, peak 1.0) which produced visible spasms.
 //
 // The whole group oscillates ±0.4 rad on X/Y on slow sine waves so the
 // camera never sees the plane straight-on for long; the changing angle
-// is what makes the spike profile readable.
+// is what makes the spike profile readable against the negative space.
 // ---------------------------------------------------------------------------
 
 // Sized to roughly match the visual footprint of the other layer types
@@ -230,16 +234,21 @@ const TEXTURE_SPIKE_BASE_HEIGHT = 0.42; // geometry height before per-instance s
 interface TextureSpike {
   x: number;
   y: number;
-  /** Per-instance height multiplier in [0.4, 1.0]; varies the skyline. */
+  /** Per-instance height base in [0.6, 1.3]; varies the skyline. */
   heightBase: number;
   /** Z-axis spin (around the spike's own axis, after rotating it upright). */
   rotZ: number;
   /** Phase offset for the breathing animation so spikes don't pulse in unison. */
   phase: number;
-  /** Twitch state — when set, spike's height is boosted until this time. */
-  twitchUntil: number;
+  /** Twitch state — start time and end time of the current twitch (if active). */
+  twitchStart: number;
+  twitchEnd: number;
   twitchAmount: number;
 }
+
+/** Maximum absolute Z-displacement applied to plane vertices. Used to recess
+ *  spike bases far enough that no random plane bump can lift them out. */
+const TEXTURE_PLANE_DISPLACE = 0.012;
 
 function TextureSurface({ layer }: { layer: PlacedLayer }) {
   const groupRef = useRef<Group>(null);
@@ -257,10 +266,10 @@ function TextureSurface({ layer }: { layer: PlacedLayer }) {
       TEXTURE_PLANE_SUBDIV,
     );
     const pos = g.attributes.position;
-    // Displacement scaled with plane size so the relative bumpiness stays
-    // consistent if the size is tuned later.
+    // Small displacement so the plane reads as faceted but spikes don't
+    // appear to lift off it when they sit over a "valley" vertex.
     for (let i = 0; i < pos.count; i++) {
-      pos.setZ(i, (Math.random() - 0.5) * 0.05);
+      pos.setZ(i, (Math.random() - 0.5) * 2 * TEXTURE_PLANE_DISPLACE);
     }
     pos.needsUpdate = true;
     g.computeVertexNormals();
@@ -268,17 +277,52 @@ function TextureSurface({ layer }: { layer: PlacedLayer }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer.id]);
 
+  // Radial alpha map — bright in centre, fully transparent at edges. The
+  // plane keeps its square outline geometrically but visually reads as a
+  // soft amorphous patch dissolving into the void. Generated once per
+  // layer (memo on layer.id is effectively per-mount).
+  const planeAlphaMap = useMemo(() => {
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+    const grad = ctx.createRadialGradient(
+      size / 2,
+      size / 2,
+      0,
+      size / 2,
+      size / 2,
+      size / 2,
+    );
+    // Hold full opacity through the inner 50%, then ease out to 0 at the
+    // bounding circle. The corners of the square get fully transparent
+    // first since they're at distance √2/2 ≈ 0.707 of the half-diagonal.
+    grad.addColorStop(0.0, '#ffffff');
+    grad.addColorStop(0.45, '#ffffff');
+    grad.addColorStop(1.0, '#000000');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, size, size);
+    const tex = new CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    return tex;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layer.id]);
+
   const spikes = useMemo<TextureSpike[]>(() => {
     return Array.from({ length: TEXTURE_SPIKE_COUNT }, () => ({
-      // Keep 4% margin from the plane edge so spikes don't poke past it.
-      x: (Math.random() - 0.5) * TEXTURE_PLANE_SIZE * 0.92,
-      y: (Math.random() - 0.5) * TEXTURE_PLANE_SIZE * 0.92,
-      // Wider range than the prior cloud — mix of stubby and tall spikes
-      // is what makes the silhouette interesting.
-      heightBase: 0.4 + Math.random() * 1.0,
+      // With the radial alpha map, the plane fades to transparent past
+      // ~0.7 of its half-extent. Keep spikes inside that bright core
+      // (radius ≈ 0.6) so they always sit on visible plane.
+      x: (Math.random() - 0.5) * TEXTURE_PLANE_SIZE * 0.6,
+      y: (Math.random() - 0.5) * TEXTURE_PLANE_SIZE * 0.6,
+      // Tighter range than before — old spread (0.4–1.4) made twitches
+      // on the tallest spikes look comically aggressive.
+      heightBase: 0.6 + Math.random() * 0.7,
       rotZ: Math.random() * Math.PI * 2,
       phase: Math.random() * Math.PI * 2,
-      twitchUntil: 0,
+      twitchStart: 0,
+      twitchEnd: 0,
       twitchAmount: 0,
     }));
   }, [layer.id]);
@@ -301,26 +345,32 @@ function TextureSurface({ layer }: { layer: PlacedLayer }) {
 
     for (let i = 0; i < TEXTURE_SPIKE_COUNT; i++) {
       const sp = spikes[i];
-      // Roll a twitch — rare sharp jump that decays over ~150ms.
-      if (Math.random() < 0.006 && t > sp.twitchUntil) {
-        sp.twitchUntil = t + 0.15;
-        sp.twitchAmount = 0.4 + Math.random() * 0.6;
+      // Roll a twitch — much rarer + smaller than the v1 attempt. Old
+      // values (0.6%/frame, amplitude up to 1.0×, 150ms linear decay)
+      // produced visible "spasms" where a single spike doubled in height
+      // for two frames. Now: ~0.25%/frame, amp 0.15–0.4, 600ms smooth
+      // sine envelope so the boost rises and falls instead of popping.
+      if (Math.random() < 0.0025 && t > sp.twitchEnd) {
+        sp.twitchStart = t;
+        sp.twitchEnd = t + 0.6;
+        sp.twitchAmount = 0.15 + Math.random() * 0.25;
       }
       let twitchBoost = 0;
-      if (t < sp.twitchUntil) {
-        twitchBoost = sp.twitchAmount * (sp.twitchUntil - t) / 0.15;
+      if (t >= sp.twitchStart && t < sp.twitchEnd) {
+        const phase = (t - sp.twitchStart) / (sp.twitchEnd - sp.twitchStart);
+        twitchBoost = sp.twitchAmount * Math.sin(phase * Math.PI);
       }
-      // Smooth breathing wave + rare twitch boost.
+      // Smooth breathing wave + rare gentle twitch boost.
       const breathe = 0.7 + Math.sin(t * 1.0 + sp.phase) * 0.3;
       const heightMul = sp.heightBase * (breathe + twitchBoost);
       const halfH = (TEXTURE_SPIKE_BASE_HEIGHT * heightMul) / 2;
 
       // Cone default axis is +Y. Rx(+PI/2) sends apex to +Z (toward camera
       // through the plane normal); the Z rotation just spins the pyramid
-      // around its own axis so the three triangular faces are oriented
-      // differently per instance (3-fold symmetry means rotZ ∈ [0, 2π/3)
-      // is enough but using full 2π is harmless).
-      dummy.position.set(sp.x, sp.y, halfH);
+      // around its own axis. Position.z = halfH - DISPLACE recesses the
+      // base by exactly the plane's max bump so even a spike standing
+      // over a "valley" vertex never appears to float above the surface.
+      dummy.position.set(sp.x, sp.y, halfH - TEXTURE_PLANE_DISPLACE);
       dummy.rotation.set(Math.PI / 2, 0, sp.rotZ);
       dummy.scale.set(1, heightMul, 1);
       dummy.updateMatrix();
@@ -341,6 +391,12 @@ function TextureSurface({ layer }: { layer: PlacedLayer }) {
           roughness={0.7}
           metalness={0.1}
           flatShading
+          alphaMap={planeAlphaMap}
+          transparent
+          // Don't write to the depth buffer — transparent pixels would
+          // otherwise occlude the spikes whose bases sit just below the
+          // plane surface, causing weird halos around the spike roots.
+          depthWrite={false}
         />
       </mesh>
       <instancedMesh
