@@ -77,64 +77,49 @@ const PALETTE: Record<
 };
 
 // ---------------------------------------------------------------------------
-// NoiseAura — instanced spark cloud surrounding an orb.
+// NoiseAura — fine dust cloud surrounding an orb.
 //
-// Glitch and Bell read as visually "noisy" without any extra geometry: their
-// silhouettes are already faceted (tetrahedron, octahedron) and their
-// emissive intensity is high (1.0, 1.1), so the Bloom postprocess turns each
-// bright facet into a smeared bright spot — the result reads as a chunky,
-// sparkly halo. Drone (intensity 0.7, rounded dodecahedron), Pulse (heart +
-// ring), and Breath (small dim points) lack that density and feel quiet next
-// to glitch/bell.
+// Drone (rounded dodecahedron, intensity 0.7), Pulse (heart + ring), and
+// Breath (small dim points) all lack the visual density that glitch's
+// tetrahedron and bell's octahedron get for free from their faceted
+// silhouettes + bloom. To bring them up to parity we scatter ~140 tiny
+// dust motes in a spherical shell around the orb's centre.
 //
-// Solution: scatter 20–40 small instanced octahedrons in a spherical shell
-// around the orb's centre, each with emissive intensity ~1.7× the palette
-// baseline, slow random rotation, and gentle position jitter. Bloom does the
-// rest — multiple bright facets in a tight cluster bloom together into a
-// glittery halo. One extra instanced-mesh drawcall per affected layer.
+// First pass used instanced octahedrons (radius 1, scale 0.05–0.11) but with
+// bloom they read as bright square chunks — the opposite of "noise". Second
+// pass uses <points> with sizeAttenuation: each particle is a single bright
+// pixel (size 0.04, ~1px at typical descent distances after attenuation).
+// Bloom smears them into soft glowing specks. Many small specks in a
+// shimmering cloud reads instantly as "dust" — what we wanted.
+//
+// Animation: each particle has a base position in the shell + a slow
+// per-particle phase offset that nudges it ±0.04 each frame, so the cloud
+// breathes/swirls without visibly moving. toneMapped=false keeps the bright
+// emissive colour from being crushed to grey.
 // ---------------------------------------------------------------------------
-interface AuraInstance {
-  pos: [number, number, number];
-  baseRot: [number, number, number];
-  rotSpeed: [number, number, number];
-  scale: number;
+interface AuraParticle {
+  baseX: number;
+  baseY: number;
+  baseZ: number;
   jitterPhase: number;
   jitterSpeed: number;
 }
 
-function makeAuraInstances(
-  count: number,
-  radius: number,
-  minScale: number,
-  maxScale: number,
-): AuraInstance[] {
+function makeAuraParticles(count: number, radius: number): AuraParticle[] {
   return Array.from({ length: count }, () => {
     // Uniform direction on the unit sphere; radius in [0.55r, 1.0r] so the
     // cloud forms a shell rather than a uniformly-filled ball — the orb's
-    // centre stays clear, the bright halo appears at its edge.
+    // centre stays clear, the dust hangs around its edge.
     const phi = Math.random() * Math.PI * 2;
     const cosTheta = Math.random() * 2 - 1;
     const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta));
     const r = radius * (0.55 + Math.random() * 0.45);
     return {
-      pos: [
-        sinTheta * Math.cos(phi) * r,
-        cosTheta * r,
-        sinTheta * Math.sin(phi) * r,
-      ],
-      baseRot: [
-        Math.random() * Math.PI * 2,
-        Math.random() * Math.PI * 2,
-        Math.random() * Math.PI * 2,
-      ],
-      rotSpeed: [
-        (Math.random() - 0.5) * 0.8, // peak ±0.4 rad/s
-        (Math.random() - 0.5) * 0.8,
-        (Math.random() - 0.5) * 0.8,
-      ],
-      scale: minScale + Math.random() * (maxScale - minScale),
+      baseX: sinTheta * Math.cos(phi) * r,
+      baseY: cosTheta * r,
+      baseZ: sinTheta * Math.sin(phi) * r,
       jitterPhase: Math.random() * Math.PI * 2,
-      jitterSpeed: 0.7 + Math.random() * 1.0,
+      jitterSpeed: 0.6 + Math.random() * 0.8,
     };
   });
 }
@@ -142,61 +127,55 @@ function makeAuraInstances(
 function NoiseAura({
   type,
   radius = 1.1,
-  count = 36,
-  minScale = 0.05,
-  maxScale = 0.11,
+  count = 140,
+  size = 0.04,
+  opacity = 0.9,
 }: {
   type: LayerType;
   radius?: number;
   count?: number;
-  minScale?: number;
-  maxScale?: number;
+  size?: number;
+  opacity?: number;
 }) {
-  const ref = useRef<InstancedMesh>(null);
-  const dummy = useMemo(() => new Object3D(), []);
-  const instances = useMemo(
-    () => makeAuraInstances(count, radius, minScale, maxScale),
-    [count, radius, minScale, maxScale],
+  const ref = useRef<Points>(null);
+  const particles = useMemo(
+    () => makeAuraParticles(count, radius),
+    [count, radius],
   );
+  const positions = useMemo(() => new Float32Array(count * 3), [count]);
 
   useFrame((s) => {
     if (!ref.current) return;
     const t = s.clock.elapsedTime;
     for (let i = 0; i < count; i++) {
-      const a = instances[i];
-      // Gentle spatial jitter — sparks "swim" within the shell. Amplitude
-      // 0.04 keeps them recognizably in place; without any jitter the halo
-      // looks frozen, with too much jitter it becomes its own distraction.
+      const a = particles[i];
+      // Gentle spatial jitter — dust "swirls" within the shell. Amplitude
+      // 0.04 is just enough that the cloud isn't frozen; any larger and
+      // particles visibly orbit, which reads as motion not noise.
       const jPhase = t * a.jitterSpeed + a.jitterPhase;
-      const jx = Math.sin(jPhase) * 0.04;
-      const jy = Math.cos(jPhase * 1.3) * 0.04;
-      const jz = Math.sin(jPhase * 0.8 + 1.5) * 0.04;
-      dummy.position.set(a.pos[0] + jx, a.pos[1] + jy, a.pos[2] + jz);
-      dummy.rotation.set(
-        a.baseRot[0] + a.rotSpeed[0] * t,
-        a.baseRot[1] + a.rotSpeed[1] * t,
-        a.baseRot[2] + a.rotSpeed[2] * t,
-      );
-      dummy.scale.setScalar(a.scale);
-      dummy.updateMatrix();
-      ref.current.setMatrixAt(i, dummy.matrix);
+      positions[i * 3] = a.baseX + Math.sin(jPhase) * 0.04;
+      positions[i * 3 + 1] = a.baseY + Math.cos(jPhase * 1.3) * 0.04;
+      positions[i * 3 + 2] = a.baseZ + Math.sin(jPhase * 0.8 + 1.5) * 0.04;
     }
-    ref.current.instanceMatrix.needsUpdate = true;
+    const attr = ref.current.geometry.getAttribute('position');
+    attr.needsUpdate = true;
   });
 
   const p = PALETTE[type];
   return (
-    <instancedMesh ref={ref} args={[undefined, undefined, count]}>
-      <octahedronGeometry args={[1, 0]} />
-      <meshStandardMaterial
-        emissive={p.emissive}
-        emissiveIntensity={p.intensity * 1.7}
-        color={p.color}
-        roughness={0.3}
-        metalness={0.4}
-        flatShading
+    <points ref={ref}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+      </bufferGeometry>
+      <pointsMaterial
+        size={size}
+        color={p.emissive}
+        transparent
+        opacity={opacity}
+        sizeAttenuation
+        toneMapped={false}
       />
-    </instancedMesh>
+    </points>
   );
 }
 
@@ -225,7 +204,7 @@ function SingleOrb({ layer }: { layer: PlacedLayer }) {
           <Geometry type={layer.type} />
           <Material type={layer.type} />
         </mesh>
-        <NoiseAura type="drone" radius={1.1} count={36} />
+        <NoiseAura type="drone" radius={1.1} />
       </group>
     );
   }
@@ -655,12 +634,12 @@ function PulseHeart({ layer }: { layer: PlacedLayer }) {
 
   return (
     <group ref={groupRef} position={layer.position}>
-      {/* Aura — sparks framing the ring and heart so pulse reads as
-          "throbbing with energy" rather than "geometric arrangement". The
-          aura sits just outside the ring radius (0.85) so the sparks
-          surround the cluster without crowding it. Rotates with the group's
+      {/* Dust aura — fine specks framing the ring and heart so pulse reads
+          as "throbbing in a haze" rather than "geometric arrangement". The
+          shell sits just outside the ring radius (0.85) so dust hangs
+          around the cluster without occluding it. Rotates with the group's
           slow Z spin so the whole thing feels like a single living object. */}
-      <NoiseAura type="pulse" radius={1.2} count={36} />
+      <NoiseAura type="pulse" radius={1.2} />
       {/* Outer ring — thin, wide, frames the heart */}
       <mesh ref={outerRef}>
         <torusGeometry args={[0.85, 0.025, 8, 48]} />
@@ -763,17 +742,12 @@ function BreathCone({ layer }: { layer: PlacedLayer }) {
 
   return (
     <group position={layer.position}>
-      {/* Source aura — small bright cluster at the emission point. Without
-          it the cone "starts from nowhere"; with it the breath has a clear
-          glowing origin, and the aura's bloom cooperates with the
-          surrounding particles to give the whole effect more presence. */}
-      <NoiseAura
-        type="breath"
-        radius={0.4}
-        count={22}
-        minScale={0.04}
-        maxScale={0.08}
-      />
+      {/* Source dust — fine cloud at the emission point. Without it the
+          cone "starts from nowhere"; the dust gives breath a clear glowing
+          origin without competing with the cone particles in particle size.
+          Smaller radius and fewer particles than drone/pulse since the
+          cone itself already provides plenty of visual mass. */}
+      <NoiseAura type="breath" radius={0.45} count={70} size={0.03} />
       <points ref={ref}>
         <bufferGeometry>
           <bufferAttribute attach="attributes-position" args={[positions, 3]} />
