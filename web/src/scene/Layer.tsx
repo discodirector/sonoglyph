@@ -6,6 +6,7 @@ import {
   type InstancedMesh,
   type Mesh,
   Object3D,
+  PlaneGeometry,
   type Points,
   Shape,
 } from 'three';
@@ -18,10 +19,13 @@ import type { LayerType, PlacedLayer } from '../state/useSession';
  * animation are all keyed off `layer.type`. Three types break out of that
  * pattern because their visual identity demands more than one drawcall:
  *
- *   - `texture` — a swarm of tiny octahedrons (<instancedMesh>) with
- *     per-instance rotation jitter. Reads as "many dust crystals" rather
- *     than a solid object — and the jitter ties it audibly to glitch/bell
- *     while keeping its own identity (many, small, slow).
+ *   - `texture` — a slightly bumpy plane with ~38 small three-sided
+ *     pyramids (cones with radialSegments=3) protruding along its
+ *     normal. The plane itself has flat-shaded random Z-displacement so
+ *     it reads as a mineral surface; the pyramids look like crystals
+ *     erupting through it. Whole group oscillates so the relief is seen
+ *     from a changing angle. Per-spike phase + occasional sharp twitches
+ *     give it the same kind of jittery noise vocabulary as glitch/bell.
  *
  *   - `pulse` — a wide outer ring + an extruded heart at its centre.
  *     The heart pulses with a lub-dub heartbeat synced loosely to the
@@ -38,7 +42,7 @@ import type { LayerType, PlacedLayer } from '../state/useSession';
  * pollutes the SingleOrb code path or the shared animateByType switch.
  */
 export function LayerOrb({ layer }: { layer: PlacedLayer }) {
-  if (layer.type === 'texture') return <TextureCloud layer={layer} />;
+  if (layer.type === 'texture') return <TextureSurface layer={layer} />;
   if (layer.type === 'pulse') return <PulseHeart layer={layer} />;
   if (layer.type === 'breath') return <BreathCone layer={layer} />;
   return <SingleOrb layer={layer} />;
@@ -187,102 +191,164 @@ function animateByType(mesh: Mesh, layer: PlacedLayer, t: number) {
 }
 
 // ---------------------------------------------------------------------------
-// TEXTURE — swarm of tiny octahedrons.
+// TEXTURE — bumpy plane with triangular spikes.
 //
-// 35 instances of a small octahedron (radius 0.05) distributed in a sphere
-// of radius ~0.85 around the layer's position. Each instance has its own
-// stable position and an independently jittering rotation — every frame
-// each octahedron has a small chance to snap to a new rotation, which
-// gives the cloud the same "noisy" feel as the glitch and bell orbs while
-// remaining a distinct silhouette family (many, tiny, distributed).
+// Two pieces share one parent group:
 //
-// Rendered via <instancedMesh> so all 35 octs share one drawcall. Position
-// + per-instance state is generated once on mount (memoized on layer.id).
+//   1. A 16×16-subdivided plane (0.85×0.85 units) whose vertex Z values
+//      have been jittered ±0.012. Combined with `flatShading`, every
+//      triangle on the plane catches light at a slightly different angle
+//      — the surface reads as faceted/rough, like crinkled foil or
+//      mineral schist. The displacement is small enough that the silhouette
+//      stays planar; the texture lives in the lighting, not in the outline.
+//
+//   2. 38 instanced cones with `radialSegments=3` (= triangular pyramids)
+//      protruding from the plane along its +Z normal. Heights randomized
+//      across [0.06, 0.20] so the spikes form a varied skyline rather
+//      than a uniform brush. Each pyramid breathes in height with its
+//      own phase, and any pyramid has a small chance per frame to "twitch"
+//      — height jumps for ~150ms then relaxes. The twitch is the same
+//      noise idea as glitch's 4% snap, dialed down to ~0.6% so the
+//      surface mostly looks calm with occasional sparks.
+//
+// The whole group oscillates ±0.4 rad on X/Y on slow sine waves so the
+// camera never sees the plane straight-on for long; the changing angle
+// is what makes the spike profile readable.
 // ---------------------------------------------------------------------------
-const TEXTURE_INSTANCE_COUNT = 35;
 
-interface TextureInstance {
-  pos: [number, number, number];
-  rot: [number, number, number];
-  scale: number;
+const TEXTURE_PLANE_SIZE = 0.85;
+const TEXTURE_PLANE_SUBDIV = 16;
+const TEXTURE_SPIKE_COUNT = 38;
+const TEXTURE_SPIKE_BASE_HEIGHT = 0.15; // geometry height before per-instance scale
+
+interface TextureSpike {
+  x: number;
+  y: number;
+  /** Per-instance height multiplier in [0.4, 1.0]; varies the skyline. */
+  heightBase: number;
+  /** Z-axis spin (around the spike's own axis, after rotating it upright). */
+  rotZ: number;
+  /** Phase offset for the breathing animation so spikes don't pulse in unison. */
   phase: number;
+  /** Twitch state — when set, spike's height is boosted until this time. */
+  twitchUntil: number;
+  twitchAmount: number;
 }
 
-function TextureCloud({ layer }: { layer: PlacedLayer }) {
-  const ref = useRef<InstancedMesh>(null);
+function TextureSurface({ layer }: { layer: PlacedLayer }) {
+  const groupRef = useRef<Group>(null);
+  const spikesRef = useRef<InstancedMesh>(null);
   const dummy = useMemo(() => new Object3D(), []);
 
-  const instances = useMemo<TextureInstance[]>(() => {
-    return Array.from({ length: TEXTURE_INSTANCE_COUNT }, () => {
-      // Roughly uniform sphere distribution.
-      const r = 0.3 + Math.random() * 0.55;
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(2 * Math.random() - 1);
-      return {
-        pos: [
-          r * Math.sin(phi) * Math.cos(theta),
-          r * Math.sin(phi) * Math.sin(theta),
-          r * Math.cos(phi),
-        ],
-        rot: [
-          Math.random() * Math.PI,
-          Math.random() * Math.PI,
-          Math.random() * Math.PI,
-        ],
-        scale: 0.7 + Math.random() * 0.6,
-        phase: Math.random() * Math.PI * 2,
-      };
-    });
-    // Layer id changes only when a new layer is created — effectively never
-    // during this component's lifetime.
+  // Bumpy plane — built once per layer. PlaneGeometry has its vertices on
+  // a regular grid; we displace each Z by a small random amount and let
+  // flatShading on the material expose the resulting micro-relief.
+  const planeGeom = useMemo(() => {
+    const g = new PlaneGeometry(
+      TEXTURE_PLANE_SIZE,
+      TEXTURE_PLANE_SIZE,
+      TEXTURE_PLANE_SUBDIV,
+      TEXTURE_PLANE_SUBDIV,
+    );
+    const pos = g.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      pos.setZ(i, (Math.random() - 0.5) * 0.025);
+    }
+    pos.needsUpdate = true;
+    g.computeVertexNormals();
+    return g;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layer.id]);
+
+  const spikes = useMemo<TextureSpike[]>(() => {
+    return Array.from({ length: TEXTURE_SPIKE_COUNT }, () => ({
+      // Keep 4% margin from the plane edge so spikes don't poke past it.
+      x: (Math.random() - 0.5) * TEXTURE_PLANE_SIZE * 0.92,
+      y: (Math.random() - 0.5) * TEXTURE_PLANE_SIZE * 0.92,
+      // Wider range than the prior cloud — mix of stubby and tall spikes
+      // is what makes the silhouette interesting.
+      heightBase: 0.4 + Math.random() * 1.0,
+      rotZ: Math.random() * Math.PI * 2,
+      phase: Math.random() * Math.PI * 2,
+      twitchUntil: 0,
+      twitchAmount: 0,
+    }));
   }, [layer.id]);
 
   useFrame((s) => {
-    if (!ref.current) return;
     const t = s.clock.elapsedTime;
 
-    // Whole cloud rotates slowly so the swarm reads as alive.
-    ref.current.rotation.y = t * 0.06;
-    ref.current.rotation.x = Math.sin(t * 0.08) * 0.15;
-
-    for (let i = 0; i < TEXTURE_INSTANCE_COUNT; i++) {
-      const inst = instances[i];
-      // Per-instance noise — same idea as glitch's 4% snap, dialed down to
-      // 1.5% so the cloud shimmers rather than convulses.
-      if (Math.random() < 0.015) {
-        inst.rot[0] += (Math.random() - 0.5) * 0.7;
-        inst.rot[1] += (Math.random() - 0.5) * 0.7;
-        inst.rot[2] += (Math.random() - 0.5) * 0.4;
-      }
-      // Subtle per-instance breathing keyed to its phase so they don't
-      // pulse in unison.
-      const breathe = 0.85 + Math.sin(t * 0.6 + inst.phase) * 0.15;
-      dummy.position.set(inst.pos[0], inst.pos[1], inst.pos[2]);
-      dummy.rotation.set(inst.rot[0], inst.rot[1], inst.rot[2]);
-      dummy.scale.setScalar(inst.scale * breathe);
-      dummy.updateMatrix();
-      ref.current.setMatrixAt(i, dummy.matrix);
+    // Slow oscillating tilt — show the texture from changing angles. Bias
+    // the X tilt slightly negative so the camera looks slightly DOWN onto
+    // the plane (it's mostly horizontal but pitched forward), which makes
+    // the spike profiles more visible than dead-on.
+    if (groupRef.current) {
+      groupRef.current.rotation.x = -0.25 + Math.sin(t * 0.18) * 0.35;
+      groupRef.current.rotation.y = Math.sin(t * 0.13) * 0.45;
     }
-    ref.current.instanceMatrix.needsUpdate = true;
+
+    if (!spikesRef.current) return;
+
+    for (let i = 0; i < TEXTURE_SPIKE_COUNT; i++) {
+      const sp = spikes[i];
+      // Roll a twitch — rare sharp jump that decays over ~150ms.
+      if (Math.random() < 0.006 && t > sp.twitchUntil) {
+        sp.twitchUntil = t + 0.15;
+        sp.twitchAmount = 0.4 + Math.random() * 0.6;
+      }
+      let twitchBoost = 0;
+      if (t < sp.twitchUntil) {
+        twitchBoost = sp.twitchAmount * (sp.twitchUntil - t) / 0.15;
+      }
+      // Smooth breathing wave + rare twitch boost.
+      const breathe = 0.7 + Math.sin(t * 1.0 + sp.phase) * 0.3;
+      const heightMul = sp.heightBase * (breathe + twitchBoost);
+      const halfH = (TEXTURE_SPIKE_BASE_HEIGHT * heightMul) / 2;
+
+      // Cone default axis is +Y. Rx(+PI/2) sends apex to +Z (toward camera
+      // through the plane normal); the Z rotation just spins the pyramid
+      // around its own axis so the three triangular faces are oriented
+      // differently per instance (3-fold symmetry means rotZ ∈ [0, 2π/3)
+      // is enough but using full 2π is harmless).
+      dummy.position.set(sp.x, sp.y, halfH);
+      dummy.rotation.set(Math.PI / 2, 0, sp.rotZ);
+      dummy.scale.set(1, heightMul, 1);
+      dummy.updateMatrix();
+      spikesRef.current.setMatrixAt(i, dummy.matrix);
+    }
+    spikesRef.current.instanceMatrix.needsUpdate = true;
   });
 
   const p = PALETTE.texture;
 
   return (
-    <instancedMesh
-      ref={ref}
-      args={[undefined, undefined, TEXTURE_INSTANCE_COUNT]}
-      position={layer.position}
-    >
-      <octahedronGeometry args={[0.05, 0]} />
-      <meshStandardMaterial
-        emissive={p.emissive}
-        emissiveIntensity={p.intensity}
-        color={p.color}
-        roughness={0.4}
-        metalness={0.2}
-      />
-    </instancedMesh>
+    <group ref={groupRef} position={layer.position}>
+      <mesh geometry={planeGeom}>
+        <meshStandardMaterial
+          emissive={p.emissive}
+          emissiveIntensity={p.intensity * 0.4}
+          color={p.color}
+          roughness={0.7}
+          metalness={0.1}
+          flatShading
+        />
+      </mesh>
+      <instancedMesh
+        ref={spikesRef}
+        args={[undefined, undefined, TEXTURE_SPIKE_COUNT]}
+      >
+        {/* radialSegments=3 → triangular pyramid (3 lateral triangles + base) */}
+        <coneGeometry args={[0.04, TEXTURE_SPIKE_BASE_HEIGHT, 3]} />
+        <meshStandardMaterial
+          emissive={p.emissive}
+          emissiveIntensity={p.intensity * 1.1}
+          color={p.color}
+          roughness={0.45}
+          metalness={0.25}
+          flatShading
+        />
+      </instancedMesh>
+    </group>
   );
 }
 
