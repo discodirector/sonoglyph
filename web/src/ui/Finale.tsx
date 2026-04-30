@@ -1,21 +1,26 @@
+import { useEffect, useState } from 'react';
+import { isAddress } from 'viem';
 import { useSession } from '../state/useSession';
+import { mintDescent } from '../net/client';
 
 /**
  * Finale screen — shown after the final layer (MAX_LAYERS).
  *
- * Layout: heading on top, glyph centered (its 32×16 monospace block is the
- * focal point), 3-paragraph journal below in a constrained column, footer
- * credit at the bottom. The bridge guarantees the journal is ≤520 chars
- * (see clampJournal in proxy/src/kimi.ts), so we can afford a fixed
- * non-scrolling viewport here.
+ * Layout (top → bottom):
+ *   - "DESCENT COMPLETE" caption
+ *   - the ASCII glyph (the visual focal point)
+ *   - the journal in italic prose
+ *   - "TRANSCRIBED BY KIMI / OFFLINE TRANSCRIPT" credit
+ *   - PinStatus    — IPFS pin progress for the WebM recording
+ *   - MintPanel    — mint the descent as an ERC-721 on Monad testnet
+ *                    (only renders once the pin lands, since mintDescent
+ *                    needs the audioCid the bridge stores after pinning)
  *
- * Below the credit we also surface the IPFS pinning status of the descent
- * recording. Three visible states:
- *   pending — "PRESERVING…" with a soft pulse, while the WebM uploads
- *   pinned  — "PRESERVED ON IPFS · <cid prefix>" with a gateway link
- *   error   — "PRESERVATION FAILED" + the truncated error text
- * Idle state is hidden — there's no useful signal before the outro fade
- * captures the blob.
+ * The bridge is the contract's sole minter, so the player doesn't sign
+ * anything or hold testnet MON — they just paste a recipient address (or
+ * pull it from window.ethereum) and the bridge does the rest. Player only
+ * gets one token per session: the GameSession on the bridge locks
+ * after the first successful mint.
  */
 export function Finale() {
   const artifact = useSession((s) => s.artifact);
@@ -32,12 +37,15 @@ export function Finale() {
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 28,
+        gap: 24,
         padding: '40px 24px',
         pointerEvents: 'auto',
         color: '#d8d4cf',
         background:
           'linear-gradient(to bottom, rgba(5,5,7,0.4) 0%, rgba(5,5,7,0.92) 100%)',
+        // The mint panel can grow when error text wraps, so let the column
+        // scroll on tiny viewports rather than clipping the button.
+        overflowY: 'auto',
       }}
     >
       <div
@@ -62,9 +70,6 @@ export function Finale() {
         </div>
       ) : (
         <>
-          {/* Glyph — the central artifact. Self-contained 32×16 block, so
-              we render it inside its own flex item to keep the centering
-              robust even if the journal below is short. */}
           <pre
             style={{
               margin: 0,
@@ -80,8 +85,6 @@ export function Finale() {
             {artifact.glyph}
           </pre>
 
-          {/* Journal — short prose, max 3 paragraphs of 2-3 sentences.
-              Fixed maxWidth so line-length stays comfortable. */}
           <div
             style={{
               maxWidth: 540,
@@ -116,16 +119,18 @@ export function Finale() {
         cid={audioCid}
         error={audioPinError}
       />
+
+      {/* Mint panel only mounts once we have a pinned CID — the bridge needs
+          it to fill audioCid in the on-chain Descent struct. */}
+      {audioPinStatus === 'pinned' && <MintPanel />}
     </div>
   );
 }
 
-/**
- * One-line status for the IPFS recording pin. Renders nothing while idle,
- * a quiet pulsing label while pending, the truncated CID + a gateway link
- * once pinned, or an error message on failure. Color register matches
- * the rest of the Finale (#6a6660 dim / #c9885b warm accent).
- */
+// -----------------------------------------------------------------------------
+// PinStatus — IPFS preservation indicator under the journal credit.
+// -----------------------------------------------------------------------------
+
 function PinStatus({
   status,
   cid,
@@ -167,7 +172,6 @@ function PinStatus({
     );
   }
 
-  // status === 'pinned'
   if (!cid) return null;
   const short = `${cid.slice(0, 8)}…${cid.slice(-6)}`;
   const gateway = `https://gateway.pinata.cloud/ipfs/${cid}`;
@@ -184,4 +188,315 @@ function PinStatus({
       </a>
     </div>
   );
+}
+
+// -----------------------------------------------------------------------------
+// MintPanel — recipient address input + mint button + result. The bridge
+// holds the contract owner key and signs/broadcasts mintDescent, so the
+// player does NOT need a wallet, MON, or chain switching — they just say
+// where the token should land. Auto-fill from window.ethereum.eth_accounts
+// when available so connected-wallet users don't have to paste.
+// -----------------------------------------------------------------------------
+
+function MintPanel() {
+  const code = useSession((s) => s.pairing?.code ?? null);
+  const mintStatus = useSession((s) => s.mintStatus);
+  const mintTokenId = useSession((s) => s.mintTokenId);
+  const mintTxHash = useSession((s) => s.mintTxHash);
+  const mintContractAddress = useSession((s) => s.mintContractAddress);
+  const mintChainId = useSession((s) => s.mintChainId);
+  const mintError = useSession((s) => s.mintError);
+  const setMintPending = useSession((s) => s.setMintPending);
+  const setMintSuccess = useSession((s) => s.setMintSuccess);
+  const setMintError = useSession((s) => s.setMintError);
+
+  const [recipient, setRecipient] = useState('');
+  const [walletNote, setWalletNote] = useState<string | null>(null);
+
+  // Silent auto-fill: ask window.ethereum for already-authorized accounts.
+  // `eth_accounts` does NOT prompt — it returns [] if the user hasn't
+  // previously connected, which is exactly what we want for a passive
+  // pre-fill. `eth_requestAccounts` (below) is the explicit opt-in path.
+  useEffect(() => {
+    const eth = (window as unknown as { ethereum?: EthereumProvider }).ethereum;
+    if (!eth?.request) return;
+    let cancelled = false;
+    void eth
+      .request({ method: 'eth_accounts' })
+      .then((accounts) => {
+        if (cancelled) return;
+        if (Array.isArray(accounts) && accounts.length > 0) {
+          const first = accounts[0];
+          if (typeof first === 'string' && isAddress(first)) {
+            setRecipient(first);
+          }
+        }
+      })
+      .catch(() => {
+        /* ignore — provider just doesn't support this method */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const isValid = isAddress(recipient.trim());
+  const trimmed = recipient.trim();
+
+  // ---- Success state ----
+  if (mintStatus === 'minted' && mintTokenId && mintTxHash) {
+    return (
+      <MintSuccess
+        tokenId={mintTokenId}
+        txHash={mintTxHash}
+        contractAddress={mintContractAddress}
+        chainId={mintChainId}
+      />
+    );
+  }
+
+  const onUseWallet = async () => {
+    const eth = (window as unknown as { ethereum?: EthereumProvider }).ethereum;
+    if (!eth?.request) {
+      setWalletNote('No wallet detected in this browser');
+      return;
+    }
+    try {
+      const accounts = await eth.request({ method: 'eth_requestAccounts' });
+      if (Array.isArray(accounts) && accounts.length > 0) {
+        const first = accounts[0];
+        if (typeof first === 'string' && isAddress(first)) {
+          setRecipient(first);
+          setWalletNote(null);
+          return;
+        }
+      }
+      setWalletNote('Wallet returned no usable address');
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      setWalletNote(m.slice(0, 100));
+    }
+  };
+
+  const onMint = async () => {
+    if (!code || !isValid) return;
+    setMintPending();
+    try {
+      const result = await mintDescent(code, trimmed);
+      setMintSuccess(result);
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      setMintError(m);
+    }
+  };
+
+  const pending = mintStatus === 'pending';
+
+  return (
+    <div
+      style={{
+        marginTop: 4,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 10,
+        maxWidth: 520,
+        width: '100%',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: '0.3em',
+          color: '#6a6660',
+          fontFamily: 'ui-monospace, Menlo, monospace',
+        }}
+      >
+        MINT TO ADDRESS
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, width: '100%' }}>
+        <input
+          type="text"
+          value={recipient}
+          onChange={(e) => setRecipient(e.target.value)}
+          placeholder="0x…"
+          spellCheck={false}
+          autoComplete="off"
+          disabled={pending}
+          style={{
+            flex: 1,
+            padding: '10px 12px',
+            background: 'rgba(255,255,255,0.04)',
+            border: `1px solid ${
+              recipient && !isValid ? '#c97a5b' : '#2a2a2e'
+            }`,
+            color: '#d8d4cf',
+            fontFamily: 'ui-monospace, Menlo, monospace',
+            fontSize: 12,
+            letterSpacing: '0.04em',
+            outline: 'none',
+            borderRadius: 0,
+          }}
+        />
+        <button
+          type="button"
+          onClick={onUseWallet}
+          disabled={pending}
+          title="Pull address from injected wallet (e.g. MetaMask)"
+          style={{
+            padding: '8px 12px',
+            background: 'transparent',
+            border: '1px solid #3a3a3e',
+            color: '#a09d99',
+            fontSize: 9,
+            letterSpacing: '0.25em',
+            fontFamily: 'inherit',
+            cursor: pending ? 'default' : 'pointer',
+            textTransform: 'uppercase',
+            opacity: pending ? 0.4 : 1,
+          }}
+        >
+          USE WALLET
+        </button>
+      </div>
+
+      {walletNote && (
+        <div style={{ fontSize: 10, color: '#c97a5b', letterSpacing: '0.05em' }}>
+          {walletNote}
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={onMint}
+        disabled={!isValid || pending}
+        style={{
+          padding: '12px 28px',
+          marginTop: 4,
+          background: isValid && !pending ? '#d8d4cf' : 'transparent',
+          color: isValid && !pending ? '#050507' : '#3a3a3e',
+          border: `1px solid ${isValid && !pending ? '#d8d4cf' : '#3a3a3e'}`,
+          letterSpacing: '0.3em',
+          fontSize: 12,
+          textTransform: 'uppercase',
+          cursor: isValid && !pending ? 'pointer' : 'default',
+          fontFamily: 'inherit',
+          transition: 'background 200ms, color 200ms, border 200ms',
+          minWidth: 220,
+        }}
+      >
+        {pending ? 'MINTING ON MONAD…' : 'MINT GLYPH'}
+      </button>
+
+      {mintStatus === 'error' && mintError && (
+        <div
+          style={{
+            fontSize: 10,
+            letterSpacing: '0.05em',
+            color: '#c97a5b',
+            fontFamily: 'ui-monospace, Menlo, monospace',
+            maxWidth: 480,
+            textAlign: 'center',
+            lineHeight: 1.5,
+            marginTop: 4,
+          }}
+        >
+          MINT FAILED · {mintError.slice(0, 200)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MintSuccess({
+  tokenId,
+  txHash,
+  contractAddress,
+  chainId,
+}: {
+  tokenId: string;
+  txHash: string;
+  contractAddress: string | null;
+  chainId: number | null;
+}) {
+  // Default to Monad testnet explorer; works for chainId 10143.
+  const baseExplorer =
+    chainId === 10143
+      ? 'https://testnet.monadexplorer.com'
+      : 'https://testnet.monadexplorer.com';
+  const txUrl = `${baseExplorer}/tx/${txHash}`;
+  const tokenUrl =
+    contractAddress != null
+      ? `${baseExplorer}/token/${contractAddress}/instance/${tokenId}`
+      : null;
+  const txShort = `${txHash.slice(0, 10)}…${txHash.slice(-6)}`;
+
+  return (
+    <div
+      style={{
+        marginTop: 4,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 8,
+        fontFamily: 'ui-monospace, Menlo, monospace',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: '0.3em',
+          color: '#7be0d4',
+        }}
+      >
+        MINTED
+      </div>
+      <div
+        style={{
+          fontSize: 22,
+          letterSpacing: '0.1em',
+          color: '#c9885b',
+        }}
+      >
+        SONOGLYPH&nbsp;#{tokenId}
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          gap: 14,
+          fontSize: 10,
+          letterSpacing: '0.18em',
+          color: '#6a6660',
+        }}
+      >
+        <a
+          href={txUrl}
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: '#a09d99', textDecoration: 'none' }}
+        >
+          TX {txShort} ↗
+        </a>
+        {tokenUrl && (
+          <a
+            href={tokenUrl}
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: '#a09d99', textDecoration: 'none' }}
+          >
+            VIEW ON CHAIN ↗
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Minimal injected-provider type. We only ever call `request` with a couple
+ * of known methods; pulling in @types/web3-eip1193 felt heavy for that.
+ */
+interface EthereumProvider {
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
 }

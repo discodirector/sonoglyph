@@ -58,6 +58,15 @@ export type AgentTurnResolution =
   | { kind: 'finished'; state: GameStateSnapshot }
   | { kind: 'timeout'; state: GameStateSnapshot };
 
+/** Snapshot of everything the bridge needs to mint a Sonoglyph for a session. */
+export interface MintPayload {
+  glyph: string;
+  journal: string;
+  audioCid: string;
+  sessionCode: string;
+  generatedBy: 'kimi' | 'fallback';
+}
+
 export class GameSession {
   readonly code: string;
 
@@ -71,6 +80,17 @@ export class GameSession {
   // Wall-clock when the descent started; used to project the current camera
   // depth on the bridge so agent-placed layers land in the player's view.
   private gameStartedAt: number | null = null;
+
+  // IPFS CID (Pinata-pinned) of the descent's WebM recording. Set once the
+  // /pin/audio endpoint successfully forwards the blob and gets a CID back.
+  // Required to assemble a MintPayload — the audio is the ONE part of the
+  // artifact that doesn't fit cleanly on-chain.
+  private audioCid: string | null = null;
+  // After a successful mint via /mint, we lock the session so a second
+  // click can't spawn a duplicate token. tokenId is decimal-string for JSON
+  // ergonomics (uint256 doesn't round-trip through Number).
+  private mintedTokenId: string | null = null;
+  private mintTxHash: string | null = null;
 
   private listeners = new Set<Listener>();
   private cooldownTimer: NodeJS.Timeout | null = null;
@@ -254,6 +274,55 @@ export class GameSession {
       // Artifact arrived after the initial finished broadcast — re-broadcast.
       this.broadcast({ type: 'finished', reason: 'max_layers', artifact });
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mint-flow helpers — the bridge owns audioCid + mint state authoritatively.
+  // The browser tells the bridge nothing more than `playerAddress`; everything
+  // else (glyph, journal, CID, sessionCode) comes out of session memory, so a
+  // misbehaving client can't slip in fake content.
+  // ---------------------------------------------------------------------------
+
+  /** Set when /pin/audio finishes a successful Pinata pin. */
+  setAudioCid(cid: string): void {
+    this.audioCid = cid;
+  }
+
+  getAudioCid(): string | null {
+    return this.audioCid;
+  }
+
+  /**
+   * Build the payload for {@link Sonoglyph.mintDescent}. Returns null if any
+   * piece is missing — caller should surface a "not ready" error rather than
+   * minting with placeholders.
+   */
+  getMintPayload(): MintPayload | null {
+    if (!this.finalArtifact) return null;
+    if (!this.audioCid) return null;
+    return {
+      glyph: this.finalArtifact.glyph,
+      journal: this.finalArtifact.journal,
+      audioCid: this.audioCid,
+      sessionCode: this.code,
+      generatedBy: this.finalArtifact.generatedBy,
+    };
+  }
+
+  /** Idempotency lock — true if this session has already been minted. */
+  isMinted(): boolean {
+    return this.mintedTokenId !== null;
+  }
+
+  /** Recorded after a successful on-chain mint. */
+  setMintResult(tokenId: string, txHash: string): void {
+    this.mintedTokenId = tokenId;
+    this.mintTxHash = txHash;
+  }
+
+  getMintResult(): { tokenId: string; txHash: string } | null {
+    if (this.mintedTokenId === null || this.mintTxHash === null) return null;
+    return { tokenId: this.mintedTokenId, txHash: this.mintTxHash };
   }
 
   /** Tear down timers, drop subscribers. Used by registry GC. */

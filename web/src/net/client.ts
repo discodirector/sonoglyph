@@ -103,3 +103,44 @@ export async function pinAudio(
   }
   return (await res.json()) as PinAudioResult;
 }
+
+// ---------------------------------------------------------------------------
+// Mint helper. The bridge holds the contract owner key and signs the mint
+// transaction itself; we just tell it which address should receive the NFT.
+// All other inputs (glyph, journal, audioCid, sessionCode) live server-side
+// in GameSession, so the request body stays one field.
+// ---------------------------------------------------------------------------
+
+export interface MintResult {
+  tokenId: string;
+  txHash: string;
+  contractAddress: string;
+  chainId: number;
+  /** True when the bridge returned a previously-stored mint result instead
+   *  of broadcasting a new transaction (idempotency for retry / refresh). */
+  cached: boolean;
+}
+
+export async function mintDescent(
+  sessionCode: string,
+  playerAddress: string,
+): Promise<MintResult> {
+  const res = await fetch(`/mint?code=${encodeURIComponent(sessionCode)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playerAddress }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const j = (await res.json()) as { error?: string };
+      detail = j?.error ?? '';
+    } catch {
+      detail = (await res.text().catch(() => '')) || '';
+    }
+    throw new Error(
+      `mint failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`,
+    );
+  }
+  return (await res.json()) as MintResult;
+}

@@ -106,6 +106,15 @@ interface SessionState {
   audioCid: string | null;
   audioPinStatus: 'idle' | 'pending' | 'pinned' | 'error';
   audioPinError: string | null;
+  /** On-chain mint state. The bridge is the sole minter and we issue at
+   *  most one token per session. 'pending' covers the entire round-trip
+   *  (sign → broadcast → wait for receipt) on Monad testnet, ~1-3 s. */
+  mintStatus: 'idle' | 'pending' | 'minted' | 'error';
+  mintTokenId: string | null;
+  mintTxHash: string | null;
+  mintContractAddress: string | null;
+  mintChainId: number | null;
+  mintError: string | null;
   startedAt: number | null;
   log: SessionEvent[];
 
@@ -134,6 +143,14 @@ interface SessionState {
   setAudioPinPending: () => void;
   setAudioPinSuccess: (cid: string) => void;
   setAudioPinError: (msg: string) => void;
+  setMintPending: () => void;
+  setMintSuccess: (result: {
+    tokenId: string;
+    txHash: string;
+    contractAddress: string;
+    chainId: number;
+  }) => void;
+  setMintError: (msg: string) => void;
   pushEvent: (e: PendingEvent) => void;
 }
 
@@ -160,6 +177,12 @@ export const useSession = create<SessionState>((set) => ({
   audioCid: null,
   audioPinStatus: 'idle',
   audioPinError: null,
+  mintStatus: 'idle',
+  mintTokenId: null,
+  mintTxHash: null,
+  mintContractAddress: null,
+  mintChainId: null,
+  mintError: null,
   startedAt: null,
   log: [],
 
@@ -239,6 +262,18 @@ export const useSession = create<SessionState>((set) => ({
     }),
   setAudioPinError: (msg) =>
     set({ audioPinStatus: 'error', audioPinError: msg }),
+  setMintPending: () =>
+    set({ mintStatus: 'pending', mintError: null }),
+  setMintSuccess: (result) =>
+    set({
+      mintStatus: 'minted',
+      mintTokenId: result.tokenId,
+      mintTxHash: result.txHash,
+      mintContractAddress: result.contractAddress,
+      mintChainId: result.chainId,
+      mintError: null,
+    }),
+  setMintError: (msg) => set({ mintStatus: 'error', mintError: msg }),
   pushEvent: (e) =>
     set((s) => ({
       log: [...s.log, { ...e, t: relTime(s.startedAt) } as SessionEvent],

@@ -28,6 +28,8 @@ import { GameRegistry } from './registry.js';
 import { handleMcpRequest, disposeMcpForSession } from './mcp.js';
 import { generateFinalArtifact } from './kimi.js';
 import { pinFileToPinata } from './storage.js';
+import { chainConfigStatus, mintSonoglyph } from './chain.js';
+import { isAddress } from 'viem';
 import type { ClientMessage, ServerMessage } from './protocol.js';
 
 const PORT = Number(process.env.PROXY_PORT ?? 8787);
@@ -46,18 +48,28 @@ app.use('*', cors({ origin: CORS_ORIGINS, credentials: true }));
 const registry = new GameRegistry();
 
 // -----------------------------------------------------------------------------
-app.get('/health', (c) =>
-  c.json({
+app.get('/health', (c) => {
+  const chain = chainConfigStatus();
+  return c.json({
     ok: true,
     service: 'sonoglyph-bridge',
     sessions: registry.size(),
     keys: {
       kimi: Boolean(process.env.KIMI_API_KEY),
       pinata: Boolean(process.env.PINATA_JWT),
+      // Mint-readiness: both keys must be set AND the contract address must
+      // pass viem's isAddress check. Surfaced so the frontend can hide the
+      // mint button when the bridge can't honour it.
+      mint: chain.hasPrivateKey && chain.hasContract,
+    },
+    chain: {
+      contract: chain.contractAddress,
+      chainId: chain.chainId,
+      rpcUrl: chain.rpcUrl,
     },
     time: Date.now(),
-  }),
-);
+  });
+});
 
 // -----------------------------------------------------------------------------
 // IPFS pinning — receives the descent's audio blob from the browser at the
@@ -102,6 +114,19 @@ app.post('/pin/audio', async (c) => {
       code,
     );
     console.log(`[pin ${code}] cid=${result.cid} size=${result.size}`);
+
+    // Persist the CID into the GameSession (if one exists for this code)
+    // so /mint can pull it without trusting the client. Sessions disappear
+    // ~30 s after WS close, so we tolerate the lookup failing — pinning
+    // succeeded either way and the client's response has the CID for
+    // out-of-band verification.
+    const game = registry.get(code);
+    if (game) {
+      game.setAudioCid(result.cid);
+    } else {
+      console.warn(`[pin ${code}] session not found — CID not persisted`);
+    }
+
     return c.json({
       cid: result.cid,
       gatewayUrl: result.gatewayUrl,
@@ -110,6 +135,130 @@ app.post('/pin/audio', async (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[pin ${code}] pin failed:`, message);
+    return c.json({ error: message }, 500);
+  }
+});
+
+// -----------------------------------------------------------------------------
+// Mint — sign + broadcast a Sonoglyph.mintDescent transaction from the
+// bridge's wallet, on behalf of `playerAddress`. The bridge is the contract's
+// sole authorized minter (see chain.ts), which lets players claim their NFT
+// without paying gas or holding testnet MON.
+//
+// Authoritative inputs (server-side, NOT trusted from the client):
+//   - glyph + journal      live on the GameSession after Kimi finalization
+//   - audioCid             written to GameSession by /pin/audio
+//   - sessionCode          the URL ?code=... param itself
+//
+// Client-supplied input (the only thing we accept from the body):
+//   - playerAddress        EIP-55 address; viem's isAddress validates it
+//
+// Idempotency: GameSession.isMinted() locks after the first successful mint.
+// A second click on the same code returns the cached { tokenId, txHash }
+// instead of producing a duplicate token.
+// -----------------------------------------------------------------------------
+app.post('/mint', async (c) => {
+  const code = c.req.query('code');
+  if (!code) {
+    return c.json({ error: 'missing ?code= query parameter' }, 400);
+  }
+  const game = registry.get(code);
+  if (!game) {
+    return c.json({ error: `unknown session: ${code}` }, 404);
+  }
+
+  let body: { playerAddress?: unknown };
+  try {
+    body = (await c.req.json()) as { playerAddress?: unknown };
+  } catch {
+    return c.json({ error: 'invalid json body' }, 400);
+  }
+  const playerAddress = body.playerAddress;
+  if (typeof playerAddress !== 'string' || !isAddress(playerAddress)) {
+    return c.json(
+      {
+        error: 'playerAddress must be a valid 0x-prefixed EIP-55 address',
+      },
+      400,
+    );
+  }
+
+  // Already minted? Return the cached result so the UI lands on the success
+  // state regardless of whether this is a retry, a stale request, or a tab
+  // re-open.
+  const existing = game.getMintResult();
+  if (existing) {
+    console.log(
+      `[mint ${code}] already minted (token=${existing.tokenId}, ` +
+        `tx=${existing.txHash}) — returning cached result`,
+    );
+    return c.json({
+      tokenId: existing.tokenId,
+      txHash: existing.txHash,
+      contractAddress: chainConfigStatus().contractAddress,
+      chainId: chainConfigStatus().chainId,
+      cached: true,
+    });
+  }
+
+  // Pre-flight: do we have everything we need?
+  if (game.getPhase() !== 'finished') {
+    return c.json(
+      {error: 'session not finished yet (descent still in progress)'},
+      409,
+    );
+  }
+  const payload = game.getMintPayload();
+  if (!payload) {
+    const audioCid = game.getAudioCid();
+    return c.json(
+      {
+        error: !audioCid
+          ? 'audio not pinned to IPFS yet — wait for PRESERVED status'
+          : 'artifact not ready yet — Kimi is still composing',
+      },
+      409,
+    );
+  }
+  const cfg = chainConfigStatus();
+  if (!cfg.hasPrivateKey || !cfg.hasContract) {
+    return c.json(
+      {
+        error:
+          'bridge mint config incomplete (DEPLOYER_PRIVATE_KEY or SONOGLYPH_CONTRACT_ADDRESS missing)',
+      },
+      503,
+    );
+  }
+
+  console.log(
+    `[mint ${code}] minting to ${playerAddress} (audioCid=${payload.audioCid}, ` +
+      `glyph=${payload.glyph.length}ch, journal=${payload.journal.length}ch)`,
+  );
+
+  try {
+    const result = await mintSonoglyph({
+      to: playerAddress as `0x${string}`,
+      glyph: payload.glyph,
+      journal: payload.journal,
+      audioCid: payload.audioCid,
+      sessionCode: payload.sessionCode,
+    });
+    game.setMintResult(result.tokenId, result.txHash);
+    console.log(
+      `[mint ${code}] tokenId=${result.tokenId} tx=${result.txHash} ` +
+        `block=${result.blockNumber} gas=${result.gasUsed}`,
+    );
+    return c.json({
+      tokenId: result.tokenId,
+      txHash: result.txHash,
+      contractAddress: result.contractAddress,
+      chainId: result.chainId,
+      cached: false,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[mint ${code}] failed:`, message);
     return c.json({ error: message }, 500);
   }
 });

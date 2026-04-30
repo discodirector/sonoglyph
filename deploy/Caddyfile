@@ -6,6 +6,7 @@
 #   /ws*    → bridge :8787  (WebSocket)
 #   /mcp*   → bridge :8787  (Streamable HTTP MCP, no buffering)
 #   /pin*   → bridge :8787  (IPFS pinning POST endpoints)
+#   /mint   → bridge :8787  (sign + broadcast Sonoglyph.mintDescent)
 #   /health → bridge :8787
 #   else    → static frontend
 #
@@ -39,6 +40,10 @@ sonoglyph.xyz, www.sonoglyph.xyz {
 		request_body {
 			max_size 50MB
 		}
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	handle /mint {
 		reverse_proxy 127.0.0.1:8787
 	}
 
