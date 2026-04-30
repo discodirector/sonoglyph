@@ -20,24 +20,31 @@ import type { LayerType, PlacedLayer } from '../state/useSession';
  * animation are all keyed off `layer.type`. Three types break out of that
  * pattern because their visual identity demands more than one drawcall:
  *
- *   - `texture` — a slightly bumpy plane with ~38 small three-sided
- *     pyramids (cones with radialSegments=3) protruding along its
- *     normal. The plane itself has flat-shaded random Z-displacement so
- *     it reads as a mineral surface; the pyramids look like crystals
- *     erupting through it. Whole group oscillates so the relief is seen
- *     from a changing angle. Per-spike phase + occasional sharp twitches
- *     give it the same kind of jittery noise vocabulary as glitch/bell.
+ *   - `texture` — a slightly bumpy plane with 28 small triangular pyramids
+ *     (cones with radialSegments=3) protruding along its normal. The
+ *     plane itself has flat-shaded random Z-displacement so it reads as
+ *     a mineral surface; the pyramids look like crystals erupting
+ *     through it. Whole group oscillates so the relief is seen from a
+ *     changing angle. Per-spike phase + occasional sharp twitches give
+ *     it the same kind of jittery noise vocabulary as glitch/bell.
  *
  *   - `pulse` — a wide outer ring + an extruded heart at its centre.
  *     The heart pulses with a lub-dub heartbeat synced loosely to the
  *     audio loop's cadence; the outer ring breathes very gently around it.
- *     A torus-knot was geometrically interesting but read as decoration,
- *     not rhythm.
+ *     A NoiseAura adds a sparkle halo so the silhouette doesn't read as
+ *     just decoration. A torus-knot was geometrically interesting but
+ *     read as decoration, not rhythm.
  *
  *   - `breath` — a particle cone that emits from a point and expands
  *     outward along +Y. Each particle ages from 0 → lifespan; position =
  *     direction × speed × age. Particles respawn at age=0 (back at the
- *     source) so the cone looks continuous. Reads instantly as "exhale".
+ *     source) so the cone looks continuous. A NoiseAura sits at the
+ *     emission point as a bright glowing mouth. Reads instantly as
+ *     "exhale".
+ *
+ * Drone (in SingleOrb) also gets a NoiseAura wrapper since its rounded
+ * dodecahedron + lower emissive intensity make its bloom timid alongside
+ * glitch's tetrahedron and bell's octahedron.
  *
  * The dispatch happens at LayerOrb top level so neither special case
  * pollutes the SingleOrb code path or the shared animateByType switch.
@@ -70,8 +77,138 @@ const PALETTE: Record<
 };
 
 // ---------------------------------------------------------------------------
+// NoiseAura — instanced spark cloud surrounding an orb.
+//
+// Glitch and Bell read as visually "noisy" without any extra geometry: their
+// silhouettes are already faceted (tetrahedron, octahedron) and their
+// emissive intensity is high (1.0, 1.1), so the Bloom postprocess turns each
+// bright facet into a smeared bright spot — the result reads as a chunky,
+// sparkly halo. Drone (intensity 0.7, rounded dodecahedron), Pulse (heart +
+// ring), and Breath (small dim points) lack that density and feel quiet next
+// to glitch/bell.
+//
+// Solution: scatter 20–40 small instanced octahedrons in a spherical shell
+// around the orb's centre, each with emissive intensity ~1.7× the palette
+// baseline, slow random rotation, and gentle position jitter. Bloom does the
+// rest — multiple bright facets in a tight cluster bloom together into a
+// glittery halo. One extra instanced-mesh drawcall per affected layer.
+// ---------------------------------------------------------------------------
+interface AuraInstance {
+  pos: [number, number, number];
+  baseRot: [number, number, number];
+  rotSpeed: [number, number, number];
+  scale: number;
+  jitterPhase: number;
+  jitterSpeed: number;
+}
+
+function makeAuraInstances(
+  count: number,
+  radius: number,
+  minScale: number,
+  maxScale: number,
+): AuraInstance[] {
+  return Array.from({ length: count }, () => {
+    // Uniform direction on the unit sphere; radius in [0.55r, 1.0r] so the
+    // cloud forms a shell rather than a uniformly-filled ball — the orb's
+    // centre stays clear, the bright halo appears at its edge.
+    const phi = Math.random() * Math.PI * 2;
+    const cosTheta = Math.random() * 2 - 1;
+    const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta));
+    const r = radius * (0.55 + Math.random() * 0.45);
+    return {
+      pos: [
+        sinTheta * Math.cos(phi) * r,
+        cosTheta * r,
+        sinTheta * Math.sin(phi) * r,
+      ],
+      baseRot: [
+        Math.random() * Math.PI * 2,
+        Math.random() * Math.PI * 2,
+        Math.random() * Math.PI * 2,
+      ],
+      rotSpeed: [
+        (Math.random() - 0.5) * 0.8, // peak ±0.4 rad/s
+        (Math.random() - 0.5) * 0.8,
+        (Math.random() - 0.5) * 0.8,
+      ],
+      scale: minScale + Math.random() * (maxScale - minScale),
+      jitterPhase: Math.random() * Math.PI * 2,
+      jitterSpeed: 0.7 + Math.random() * 1.0,
+    };
+  });
+}
+
+function NoiseAura({
+  type,
+  radius = 1.1,
+  count = 36,
+  minScale = 0.05,
+  maxScale = 0.11,
+}: {
+  type: LayerType;
+  radius?: number;
+  count?: number;
+  minScale?: number;
+  maxScale?: number;
+}) {
+  const ref = useRef<InstancedMesh>(null);
+  const dummy = useMemo(() => new Object3D(), []);
+  const instances = useMemo(
+    () => makeAuraInstances(count, radius, minScale, maxScale),
+    [count, radius, minScale, maxScale],
+  );
+
+  useFrame((s) => {
+    if (!ref.current) return;
+    const t = s.clock.elapsedTime;
+    for (let i = 0; i < count; i++) {
+      const a = instances[i];
+      // Gentle spatial jitter — sparks "swim" within the shell. Amplitude
+      // 0.04 keeps them recognizably in place; without any jitter the halo
+      // looks frozen, with too much jitter it becomes its own distraction.
+      const jPhase = t * a.jitterSpeed + a.jitterPhase;
+      const jx = Math.sin(jPhase) * 0.04;
+      const jy = Math.cos(jPhase * 1.3) * 0.04;
+      const jz = Math.sin(jPhase * 0.8 + 1.5) * 0.04;
+      dummy.position.set(a.pos[0] + jx, a.pos[1] + jy, a.pos[2] + jz);
+      dummy.rotation.set(
+        a.baseRot[0] + a.rotSpeed[0] * t,
+        a.baseRot[1] + a.rotSpeed[1] * t,
+        a.baseRot[2] + a.rotSpeed[2] * t,
+      );
+      dummy.scale.setScalar(a.scale);
+      dummy.updateMatrix();
+      ref.current.setMatrixAt(i, dummy.matrix);
+    }
+    ref.current.instanceMatrix.needsUpdate = true;
+  });
+
+  const p = PALETTE[type];
+  return (
+    <instancedMesh ref={ref} args={[undefined, undefined, count]}>
+      <octahedronGeometry args={[1, 0]} />
+      <meshStandardMaterial
+        emissive={p.emissive}
+        emissiveIntensity={p.intensity * 1.7}
+        color={p.color}
+        roughness={0.3}
+        metalness={0.4}
+        flatShading
+      />
+    </instancedMesh>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // SingleOrb — covers 6 of 9 types: drone, glitch, bell, drip, swell, chord.
 // (texture, pulse, breath have their own components.)
+//
+// Drone gets a NoiseAura wrapper since its rounded dodecahedron + lower
+// emissive intensity make its bloom halo timid; the aura brings it in line
+// with glitch/bell's visual density. The other five orbs already have either
+// faceted geometry (glitch, bell) or distinct silhouettes (drip, swell,
+// chord) that bloom adequately on their own.
 // ---------------------------------------------------------------------------
 function SingleOrb({ layer }: { layer: PlacedLayer }) {
   const ref = useRef<Mesh>(null);
@@ -80,6 +217,18 @@ function SingleOrb({ layer }: { layer: PlacedLayer }) {
     if (!ref.current) return;
     animateByType(ref.current, layer, s.clock.elapsedTime);
   });
+
+  if (layer.type === 'drone') {
+    return (
+      <group position={layer.position}>
+        <mesh ref={ref}>
+          <Geometry type={layer.type} />
+          <Material type={layer.type} />
+        </mesh>
+        <NoiseAura type="drone" radius={1.1} count={36} />
+      </group>
+    );
+  }
 
   return (
     <mesh ref={ref} position={layer.position}>
@@ -506,6 +655,12 @@ function PulseHeart({ layer }: { layer: PlacedLayer }) {
 
   return (
     <group ref={groupRef} position={layer.position}>
+      {/* Aura — sparks framing the ring and heart so pulse reads as
+          "throbbing with energy" rather than "geometric arrangement". The
+          aura sits just outside the ring radius (0.85) so the sparks
+          surround the cluster without crowding it. Rotates with the group's
+          slow Z spin so the whole thing feels like a single living object. */}
+      <NoiseAura type="pulse" radius={1.2} count={36} />
       {/* Outer ring — thin, wide, frames the heart */}
       <mesh ref={outerRef}>
         <torusGeometry args={[0.85, 0.025, 8, 48]} />
@@ -532,22 +687,27 @@ function PulseHeart({ layer }: { layer: PlacedLayer }) {
 }
 
 // ---------------------------------------------------------------------------
-// BREATH — conical particle emission.
+// BREATH — conical particle emission + source aura.
 //
-// 60 particles. Each has a fixed direction (within a 35° cone around +Y),
-// a fixed speed (0.25–0.6 u/s), and a cyclic age that runs 0 → lifespan
-// → 0. Position = direction × speed × age, so at age=0 the particle is at
-// the source (tightly clustered with its neighbours) and at age=lifespan
-// it's at the cone's far edge (well separated from them). Particles
-// respawn back at the source so the cone looks continuously emitting.
+// 100 particles (bumped from 60 for visual density). Each has a fixed
+// direction (within a 35° cone around +Y), a fixed speed (0.25–0.6 u/s),
+// and a cyclic age that runs 0 → lifespan → 0. Position = direction ×
+// speed × age, so at age=0 the particle is at the source (tightly
+// clustered with its neighbours) and at age=lifespan it's at the cone's
+// far edge (well separated from them). Particles respawn back at the
+// source so the cone looks continuously emitting.
 //
 // Initial ages are staggered across [0, lifespan) so the cone is fully
 // populated from frame zero rather than starting empty and filling.
 //
+// A NoiseAura cluster sits at the emission point — without it the cone
+// "starts from nowhere"; with it the breath has a clear glowing mouth
+// and matches the visual density of glitch/bell.
+//
 // Rendered as <points> with toneMapped=false so the rose colour pops on
 // the dark background.
 // ---------------------------------------------------------------------------
-const BREATH_PARTICLE_COUNT = 60;
+const BREATH_PARTICLE_COUNT = 100;
 
 interface BreathParticle {
   dir: [number, number, number];
@@ -602,18 +762,31 @@ function BreathCone({ layer }: { layer: PlacedLayer }) {
   const p = PALETTE.breath;
 
   return (
-    <points ref={ref} position={layer.position}>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-      </bufferGeometry>
-      <pointsMaterial
-        size={0.06}
-        color={p.emissive}
-        transparent
-        opacity={0.9}
-        sizeAttenuation
-        toneMapped={false}
+    <group position={layer.position}>
+      {/* Source aura — small bright cluster at the emission point. Without
+          it the cone "starts from nowhere"; with it the breath has a clear
+          glowing origin, and the aura's bloom cooperates with the
+          surrounding particles to give the whole effect more presence. */}
+      <NoiseAura
+        type="breath"
+        radius={0.4}
+        count={22}
+        minScale={0.04}
+        maxScale={0.08}
       />
-    </points>
+      <points ref={ref}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        </bufferGeometry>
+        <pointsMaterial
+          size={0.11}
+          color={p.emissive}
+          transparent
+          opacity={1.0}
+          sizeAttenuation
+          toneMapped={false}
+        />
+      </points>
+    </group>
   );
 }
