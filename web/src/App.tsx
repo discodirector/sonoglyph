@@ -15,7 +15,7 @@ import {
   startRecording,
   stopRecording,
 } from './audio/engine';
-import { openBridge, type BridgeConnection } from './net/client';
+import { openBridge, pinAudio, type BridgeConnection } from './net/client';
 
 /**
  * Sonoglyph root — Day 5.
@@ -37,6 +37,12 @@ export function App() {
   const setProxyOk = useSession((s) => s.setProxyOk);
   const setRecording = useSession((s) => s.setRecording);
   const setRecordingBlob = useSession((s) => s.setRecordingBlob);
+  const recordingBlob = useSession((s) => s.recordingBlob);
+  const audioPinStatus = useSession((s) => s.audioPinStatus);
+  const setAudioPinPending = useSession((s) => s.setAudioPinPending);
+  const setAudioPinSuccess = useSession((s) => s.setAudioPinSuccess);
+  const setAudioPinError = useSession((s) => s.setAudioPinError);
+  const pairingCode = useSession((s) => s.pairing?.code ?? null);
   const setSelectedPreset = useSession((s) => s.setSelectedPreset);
   const pushEvent = useSession((s) => s.pushEvent);
   const applySessionCreated = useSession((s) => s.applySessionCreated);
@@ -129,6 +135,48 @@ export function App() {
 
     return () => window.clearTimeout(timer);
   }, [layersCount, maxLayers, setRecordingBlob, setRecording]);
+
+  // ---------------------------------------------------------------------------
+  // IPFS pin: as soon as we have the recording blob, push it through the
+  // bridge to Pinata. Status is mirrored into the store so the Finale UI
+  // (and later the mint button) can see "pending" → "pinned" → "error".
+  //
+  // Idempotency: gated on `audioPinStatus === 'idle'`. Once the call is in
+  // flight or has succeeded, we never re-fire — the network round trip is
+  // expensive enough (5 MB upload) that retries should be explicit, not a
+  // side effect of a re-render.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!recordingBlob) return;
+    if (audioPinStatus !== 'idle') return;
+    setAudioPinPending();
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await pinAudio(recordingBlob, pairingCode ?? undefined);
+        if (cancelled) return;
+        console.log(
+          `[ipfs] pinned ${(recordingBlob.size / 1024).toFixed(1)} KiB → ${result.cid}`,
+        );
+        setAudioPinSuccess(result.cid);
+      } catch (err) {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[ipfs] pin failed:', message);
+        setAudioPinError(message);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    recordingBlob,
+    audioPinStatus,
+    pairingCode,
+    setAudioPinPending,
+    setAudioPinSuccess,
+    setAudioPinError,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Open the bridge on mount — well before Begin. We need the code to

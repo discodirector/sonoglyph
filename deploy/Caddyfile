@@ -5,6 +5,7 @@
 # Layout:
 #   /ws*    → bridge :8787  (WebSocket)
 #   /mcp*   → bridge :8787  (Streamable HTTP MCP, no buffering)
+#   /pin*   → bridge :8787  (IPFS pinning POST endpoints)
 #   /health → bridge :8787
 #   else    → static frontend
 #
@@ -29,6 +30,16 @@ sonoglyph.xyz, www.sonoglyph.xyz {
 		reverse_proxy 127.0.0.1:8787 {
 			flush_interval -1
 		}
+	}
+
+	@pin path /pin /pin/*
+	handle @pin {
+		# Audio uploads (~5 MB WebM). Default 1 MB request body cap is too
+		# small — bump to 50 MB to leave plenty of headroom.
+		request_body {
+			max_size 50MB
+		}
+		reverse_proxy 127.0.0.1:8787
 	}
 
 	handle /health {

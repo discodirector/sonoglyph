@@ -99,6 +99,13 @@ interface SessionState {
    *  the end of the outro fade; consumed by the IPFS pinning step before
    *  the on-chain mint. Null until then. */
   recordingBlob: Blob | null;
+  /** IPFS CID of the pinned descent recording (Pinata). Set after the
+   *  bridge confirms the pin succeeded; the on-chain mint references
+   *  this. 'pending' while the upload is in flight; 'error' if the pin
+   *  call failed (UI surfaces a retry). Null before any attempt. */
+  audioCid: string | null;
+  audioPinStatus: 'idle' | 'pending' | 'pinned' | 'error';
+  audioPinError: string | null;
   startedAt: number | null;
   log: SessionEvent[];
 
@@ -124,6 +131,9 @@ interface SessionState {
   setProxyOk: (ok: boolean) => void;
   setRecording: (r: boolean) => void;
   setRecordingBlob: (b: Blob | null) => void;
+  setAudioPinPending: () => void;
+  setAudioPinSuccess: (cid: string) => void;
+  setAudioPinError: (msg: string) => void;
   pushEvent: (e: PendingEvent) => void;
 }
 
@@ -147,6 +157,9 @@ export const useSession = create<SessionState>((set) => ({
   proxyOk: null,
   recording: false,
   recordingBlob: null,
+  audioCid: null,
+  audioPinStatus: 'idle',
+  audioPinError: null,
   startedAt: null,
   log: [],
 
@@ -216,6 +229,16 @@ export const useSession = create<SessionState>((set) => ({
   setProxyOk: (ok) => set({ proxyOk: ok }),
   setRecording: (r) => set({ recording: r }),
   setRecordingBlob: (b) => set({ recordingBlob: b }),
+  setAudioPinPending: () =>
+    set({ audioPinStatus: 'pending', audioPinError: null }),
+  setAudioPinSuccess: (cid) =>
+    set({
+      audioCid: cid,
+      audioPinStatus: 'pinned',
+      audioPinError: null,
+    }),
+  setAudioPinError: (msg) =>
+    set({ audioPinStatus: 'error', audioPinError: msg }),
   pushEvent: (e) =>
     set((s) => ({
       log: [...s.log, { ...e, t: relTime(s.startedAt) } as SessionEvent],

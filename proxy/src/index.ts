@@ -27,6 +27,7 @@ import type { WebSocket as WSConn } from 'ws';
 import { GameRegistry } from './registry.js';
 import { handleMcpRequest, disposeMcpForSession } from './mcp.js';
 import { generateFinalArtifact } from './kimi.js';
+import { pinFileToPinata } from './storage.js';
 import type { ClientMessage, ServerMessage } from './protocol.js';
 
 const PORT = Number(process.env.PROXY_PORT ?? 8787);
@@ -52,10 +53,66 @@ app.get('/health', (c) =>
     sessions: registry.size(),
     keys: {
       kimi: Boolean(process.env.KIMI_API_KEY),
+      pinata: Boolean(process.env.PINATA_JWT),
     },
     time: Date.now(),
   }),
 );
+
+// -----------------------------------------------------------------------------
+// IPFS pinning — receives the descent's audio blob from the browser at the
+// end of the outro fade and pins it via Pinata. The returned CID is what
+// the mint transaction will reference.
+//
+// Why a single endpoint and not also /pin/metadata: the journal + glyph are
+// short enough to live directly in contract storage on Monad testnet, and
+// the contract assembles tokenURI on-chain (base64 dataURL with embedded
+// SVG). Pinning a metadata JSON would add an off-chain dependency without
+// shrinking the on-chain footprint meaningfully.
+//
+// Body shape: raw bytes (Content-Type: audio/webm). We accept ArrayBuffer
+// rather than multipart so the browser-side `fetch` is a one-liner. Size
+// limit is governed by Pinata's free tier (no per-upload cap that we
+// regularly hit; full descents are ~5 MB at 128 kbps WebM).
+// -----------------------------------------------------------------------------
+app.post('/pin/audio', async (c) => {
+  const code = c.req.query('code') ?? 'unknown';
+  const contentType = c.req.header('content-type') ?? 'audio/webm';
+  let buffer: ArrayBuffer;
+  try {
+    buffer = await c.req.arrayBuffer();
+  } catch (err) {
+    console.error(`[pin ${code}] failed to read body`, err);
+    return c.json({ error: 'failed to read body' }, 400);
+  }
+  if (buffer.byteLength === 0) {
+    return c.json({ error: 'empty body' }, 400);
+  }
+
+  console.log(
+    `[pin ${code}] uploading ${(buffer.byteLength / 1024).toFixed(1)} KiB ` +
+      `(${contentType}) to Pinata`,
+  );
+  try {
+    const fileName = `descent-${code}.webm`;
+    const result = await pinFileToPinata(
+      buffer,
+      fileName,
+      contentType,
+      code,
+    );
+    console.log(`[pin ${code}] cid=${result.cid} size=${result.size}`);
+    return c.json({
+      cid: result.cid,
+      gatewayUrl: result.gatewayUrl,
+      size: result.size,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[pin ${code}] pin failed:`, message);
+    return c.json({ error: message }, 500);
+  }
+});
 
 // -----------------------------------------------------------------------------
 // MCP endpoint — the player's Hermes connects here using the code from the

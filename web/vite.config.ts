@@ -16,6 +16,11 @@ export default defineConfig({
         target: 'http://localhost:8787',
         changeOrigin: true,
       },
+      // IPFS pinning. Bridge accepts the raw WebM body and forwards to Pinata.
+      '/pin': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+      },
     },
   },
 });
