@@ -199,7 +199,10 @@ function SingleOrb({ layer }: { layer: PlacedLayer }) {
           <Geometry type={layer.type} />
           <Material type={layer.type} />
         </mesh>
-        <NoiseAura type="drone" radius={0.45} count={70} size={0.03} />
+        {/* Aura radius scaled with the dodec (was 0.45 for 0.62 dodec; now
+            0.62 for 0.85 dodec) so the dust shell still hangs at the same
+            relative offset from the surface. */}
+        <NoiseAura type="drone" radius={0.62} count={70} size={0.03} />
       </group>
     );
   }
@@ -213,11 +216,16 @@ function SingleOrb({ layer }: { layer: PlacedLayer }) {
 }
 
 function Geometry({ type }: { type: LayerType }) {
+  // Sizing pass (May): base radii bumped so the smallest orbs (drip, glitch,
+  // bell) don't disappear at typical camera distances. Target band is 0.75–
+  // 0.90 — narrows the cross-type variability from ~4× (drip 0.4 vs texture)
+  // to ~2× while keeping each silhouette distinct. Tube thicknesses on
+  // tori scaled proportionally so the proportions stay right.
   switch (type) {
     case 'drone':
       // Dodecahedron — heavier than the prior icosahedron, twelve pentagonal
       // faces read as "geological boulder" rather than "generic die".
-      return <dodecahedronGeometry args={[0.62, 0]} />;
+      return <dodecahedronGeometry args={[0.85, 0]} />;
     // texture / pulse / breath — unreachable. LayerOrb dispatches them to
     // their own components before SingleOrb mounts. Fallback geometries
     // exist only to satisfy the exhaustive switch.
@@ -228,15 +236,15 @@ function Geometry({ type }: { type: LayerType }) {
     case 'breath':
       return <capsuleGeometry args={[0.32, 0.55, 4, 12]} />;
     case 'glitch':
-      return <tetrahedronGeometry args={[0.5, 0]} />;
+      return <tetrahedronGeometry args={[0.78, 0]} />;
     case 'bell':
-      return <octahedronGeometry args={[0.55, 0]} />;
+      return <octahedronGeometry args={[0.85, 0]} />;
     case 'drip':
-      return <sphereGeometry args={[0.4, 16, 16]} />;
+      return <sphereGeometry args={[0.72, 16, 16]} />;
     case 'swell':
-      return <torusGeometry args={[0.65, 0.08, 12, 36]} />;
+      return <torusGeometry args={[0.88, 0.11, 12, 36]} />;
     case 'chord':
-      return <torusGeometry args={[0.55, 0.18, 14, 32]} />;
+      return <torusGeometry args={[0.82, 0.27, 14, 32]} />;
   }
 }
 
@@ -469,11 +477,13 @@ function PulseHeart({ layer }: { layer: PlacedLayer }) {
   // around the shape's drawing origin (which sits on the bottom point).
   const heartGeom = useMemo(() => {
     const g = new ExtrudeGeometry(makeHeartShape(), {
-      depth: 0.08,
+      depth: 0.11,
       bevelEnabled: false,
       curveSegments: 16,
     });
-    g.scale(0.22, -0.22, 0.22); // negative Y flips so cleft is up to camera
+    // Bumped from 0.22 → 0.30 to match the wider arena ring and the new
+    // larger orb sizes elsewhere.
+    g.scale(0.3, -0.3, 0.3); // negative Y flips so cleft is up to camera
     g.center();
     return g;
   }, []);
@@ -518,9 +528,10 @@ function PulseHeart({ layer }: { layer: PlacedLayer }) {
 
   return (
     <group ref={groupRef} position={layer.position}>
-      {/* Outer ring — thin, wide, frames the heart */}
+      {/* Outer ring — thin, wide, frames the heart. Radius 1.0 (up from
+          0.85) so it stays visibly larger than the new heart at 0.3 scale. */}
       <mesh ref={outerRef}>
-        <torusGeometry args={[0.85, 0.025, 8, 48]} />
+        <torusGeometry args={[1.0, 0.035, 8, 48]} />
         <meshStandardMaterial
           emissive={p.emissive}
           emissiveIntensity={p.intensity * 0.7}
@@ -623,15 +634,15 @@ function BreathCone({ layer }: { layer: PlacedLayer }) {
       {/* Source dust — fine cloud at the emission point. Without it the
           cone "starts from nowhere"; the dust gives breath a clear glowing
           origin without competing with the cone particles in particle size.
-          Smaller radius and fewer particles than drone/pulse since the
-          cone itself already provides plenty of visual mass. */}
-      <NoiseAura type="breath" radius={0.45} count={70} size={0.03} />
+          Radius matched to drone's new 0.62 so the source reads at a
+          comparable scale to its neighbour orbs. */}
+      <NoiseAura type="breath" radius={0.62} count={70} size={0.03} />
       <points ref={ref}>
         <bufferGeometry>
           <bufferAttribute attach="attributes-position" args={[positions, 3]} />
         </bufferGeometry>
         <pointsMaterial
-          size={0.11}
+          size={0.13}
           color={p.emissive}
           transparent
           opacity={1.0}
