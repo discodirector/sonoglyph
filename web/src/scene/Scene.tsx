@@ -167,91 +167,6 @@ function ParallaxDust() {
 }
 
 /**
- * Generate a "heart-monitor" style displacement profile for one ring —
- * mostly flat baseline, with a handful of sharp narrow spikes and small
- * inverse dips, like the QRS complex on an ECG trace.
- *
- * Returns N samples of radial displacement (added to the ring's base radius
- * during torus vertex displacement). Sampled with linear interpolation when
- * applied, so vertex count and N don't have to match.
- */
-function generatePulseProfile(N: number): number[] {
-  const out = new Array<number>(N).fill(0);
-
-  // Baseline micro-noise: barely perceptible wobble that breaks perfect
-  // smoothness even between spikes. ±0.02 ≈ 0.3% of ring radius.
-  for (let i = 0; i < N; i++) {
-    out[i] = (Math.random() - 0.5) * 0.04;
-  }
-
-  // 5-8 sharp spike complexes randomly placed around the ring. Each is a
-  // narrow Gaussian with optional adjacent inverse dip — mirrors the visual
-  // shape of an ECG R-wave with neighboring S-wave.
-  const numPulses = 5 + Math.floor(Math.random() * 4);
-  for (let p = 0; p < numPulses; p++) {
-    const center = Math.floor(Math.random() * N);
-    const peakHeight = 0.35 + Math.random() * 0.55; // outward spike
-    const width = 4 + Math.floor(Math.random() * 4); // half-width in samples
-
-    for (let j = -width * 2; j <= width * 2; j++) {
-      const idx = ((center + j) % N + N) % N;
-      const t = j / width;
-      // Tight Gaussian — sharp peak that decays in a few samples.
-      out[idx] += peakHeight * Math.exp(-t * t * 1.5);
-    }
-
-    // 70% chance of an adjacent inverse dip on one side.
-    if (Math.random() < 0.7) {
-      const sign = Math.random() < 0.5 ? -1 : 1;
-      const dipCenter =
-        ((center + sign * (width + 2 + Math.floor(Math.random() * 3))) % N +
-          N) %
-        N;
-      const dipDepth = 0.06 + Math.random() * 0.14;
-      for (let j = -3; j <= 3; j++) {
-        const idx = ((dipCenter + j) % N + N) % N;
-        const t = j / 3;
-        out[idx] -= dipDepth * Math.exp(-t * t * 2);
-      }
-    }
-  }
-  return out;
-}
-
-/**
- * Apply a radial-displacement profile to a TorusGeometry's vertices in-place.
- * Torus is constructed in the XY plane (ring around Z axis); we displace each
- * vertex radially outward from origin by an amount sampled from the profile
- * at the vertex's angle around the ring. Tube cross-section gets multiplied
- * along with the rest, but at our tube radius (0.03) that shape change is
- * imperceptible.
- */
-function applyPulseToTorus(geo: TorusGeometry, profile: number[]): void {
-  const pos = geo.attributes.position;
-  const N = profile.length;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    const angle = Math.atan2(y, x); // -π..π
-    const t = (angle + Math.PI) / (Math.PI * 2); // 0..1
-    const idxF = t * N;
-    const i0 = Math.floor(idxF) % N;
-    const i1 = (i0 + 1) % N;
-    const frac = idxF - Math.floor(idxF);
-    const disp = profile[i0] * (1 - frac) + profile[i1] * frac;
-
-    const r = Math.sqrt(x * x + y * y);
-    if (r > 1e-6) {
-      const factor = (r + disp) / r;
-      pos.setX(i, x * factor);
-      pos.setY(i, y * factor);
-    }
-  }
-  pos.needsUpdate = true;
-  geo.computeBoundingSphere();
-}
-
-/**
  * Render depth-label text ("200", "400", ...) into a CanvasTexture. Wider
  * than tall to fit 3-4 digits in IBM Plex Mono.
  */
@@ -273,30 +188,37 @@ function makeDepthLabelTexture(text: string): CanvasTexture {
 }
 
 /**
- * Faint horizontal rings every 100 depth units down through the corridor —
- * the player's only "ruler" against the void. Big change from the v1 grid:
+ * Living depth rings — each ring is a perfect torus at rest, but its vertex
+ * positions are recomputed every frame as the sum of a small pool of active
+ * "pulse events" that randomly spawn, peak, and decay. Reads as a calm
+ * circle that occasionally spikes outward (or briefly dips inward) at random
+ * spots, like an ECG trace bent into a loop.
  *
- * - Each ring's vertices are displaced by a per-ring pulse profile so the
- *   silhouette wiggles like an ECG trace (mostly flat with sharp narrow
- *   spikes). Generated once at mount and baked into the BufferGeometry.
+ * Architecture per ring:
+ *   - Geometry is a TorusGeometry built once at mount (the canonical "rest"
+ *     shape). We cache its base xy positions, base radii, and base angles
+ *     into Float32Arrays so the per-frame loop never calls atan2 / sqrt.
+ *   - A pool of `RingEvent`s tracks currently-active spikes: each has a
+ *     birth/peak/end time, a target angle, an amplitude (signed), and a
+ *     spatial half-width. Time envelope is asymmetric — fast rise, slower
+ *     fall — to look like a heartbeat blip rather than a sine wobble.
+ *   - Each frame: cull events whose `end < now`, spawn fresh events when
+ *     the ring's `nextSpawnAt` clock fires, then for every vertex sum the
+ *     contribution of every active event and write the displaced position
+ *     directly into the underlying Float32Array (faster than .setX/.setY).
  *
- * - ~30% of rings are broken arcs (40–80% of a full circle) at random
- *   start angles, ~14% are skipped entirely. Radii vary 5.5–8.0; centers
- *   are slightly off-axis (±1.5 x, ±1 z); each ring carries a small
- *   ±~6° tilt around X and Z so they don't all lie on the same horizontal
- *   plane.
+ * Spawn cadence is ring-class-aware: accent rings fire ~every 0.8-2.5s,
+ * non-accent rings ~every 1.5-4.0s. With ~9 rings active that gives ~3
+ * pops per second across the whole shaft — present enough to feel alive,
+ * sparse enough to read as deliberate.
  *
- * - Every 2nd ring is an "accent" — slightly more visible plus a depth
- *   label sprite ("200", "400", ...) pinned just outside its right side,
- *   so the player has a literal sense of how deep they've gone.
+ * Structure (unchanged from v2): rings spaced every 100 ud down to -1100,
+ * accent every 2nd (labels at 200, 400, 600, 800, 1000), ~14% skipped,
+ * ~30% partial arcs, slight per-ring tilt + radius + center variation,
+ * dim color palette so rings emerge from the fog rather than stand out.
  *
- * - Brightness halved overall vs. v1: base #4a463f / opacity 0.10 (was
- *   0.18), accent #7a8a98 / opacity 0.18 (was 0.32). Rings now "emerge
- *   from the fog" rather than stand out in front of it.
- *
- * Cost: ~9-10 mesh draw calls (after misses) + ~5 sprites. Each torus has
- * 240×4 = 960 vertices — total geometry well under 10k vertices for the
- * whole layer.
+ * Cost: ~9 rings × 240 vertices × ~3 active events = ~7k Gaussian evals
+ * per frame. Position-buffer upload ~26 KB/frame at 60 Hz.
  */
 function DepthRings() {
   type RingSpec = {
@@ -304,48 +226,62 @@ function DepthRings() {
     cx: number;
     cz: number;
     radius: number;
-    arc: number; // 1.0 for full ring; 0.4-0.8 when broken
+    arc: number; // 1.0 full circle; 0.4-0.8 when broken
     tiltX: number;
     tiltZ: number;
-    arcRotY: number; // world Y rotation that decides where a broken arc starts
+    arcRotY: number;
     accent: boolean;
     label: string | null;
-    profile: number[];
+  };
+
+  type RingEvent = {
+    birth: number;
+    peak: number;
+    end: number;
+    angle: number; // radians, in geometry's local frame (0..arc*2π)
+    amplitude: number; // signed peak displacement (positive = outward)
+    width: number; // angular half-width (radians)
+  };
+
+  type RingRuntime = {
+    geo: TorusGeometry;
+    N: number;
+    baseX: Float32Array;
+    baseY: Float32Array;
+    baseRadius: Float32Array;
+    baseAngle: Float32Array; // -π..π
+    events: RingEvent[];
+    nextSpawnAt: number; // ms (performance.now timeline)
   };
 
   const rings = useMemo<RingSpec[]>(() => {
     const out: RingSpec[] = [];
     for (let i = 1; i <= 11; i++) {
-      // ~14% of rings skipped entirely — uneven gaps make the structure
-      // feel discovered rather than placed.
-      if (Math.random() < 0.14) continue;
+      if (Math.random() < 0.14) continue; // ~14% skipped
       const broken = Math.random() < 0.3;
-      const accent = i % 2 === 0; // every 200 ud → 5 accents
-      const y = -i * 100;
+      const accent = i % 2 === 0;
       out.push({
-        y,
+        y: -i * 100,
         cx: (Math.random() - 0.5) * 3,
         cz: -6 + (Math.random() - 0.5) * 2,
         radius: 5.5 + Math.random() * 2.5,
         arc: broken ? 0.4 + Math.random() * 0.4 : 1.0,
-        tiltX: (Math.random() - 0.5) * 0.2, // ±~5.7°
+        tiltX: (Math.random() - 0.5) * 0.2,
         tiltZ: (Math.random() - 0.5) * 0.2,
         arcRotY: Math.random() * Math.PI * 2,
         accent,
         label: accent ? `${i * 100}` : null,
-        profile: generatePulseProfile(240),
       });
     }
     return out;
   }, []);
 
-  // Build one TorusGeometry per ring with the pulse profile baked in. Done
-  // in a single useMemo so we control disposal explicitly.
-  const geometries = useMemo<TorusGeometry[]>(() => {
+  // Per-ring runtime: geometry + cached base data + event pool. Built once
+  // when `rings` settles and reused across renders.
+  const runtimes = useMemo<RingRuntime[]>(() => {
     return rings.map((r) => {
-      // tubularSegments=240 gives ~1.5° resolution — fine enough that the
-      // pulse spikes look sharp. radialSegments=4 because the tube is so
-      // thin (0.03) that cross-section detail is invisible.
+      // tubularSegments=240 → ~1.5° per segment; sharp enough for fast
+      // spikes to read crisp without running up the vertex count.
       const geo = new TorusGeometry(
         r.radius,
         0.03,
@@ -353,12 +289,132 @@ function DepthRings() {
         240,
         Math.PI * 2 * r.arc,
       );
-      applyPulseToTorus(geo, r.profile);
-      return geo;
+      const pos = geo.attributes.position;
+      const N = pos.count;
+      const baseX = new Float32Array(N);
+      const baseY = new Float32Array(N);
+      const baseRadius = new Float32Array(N);
+      const baseAngle = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        const x = pos.getX(i);
+        const y = pos.getY(i);
+        baseX[i] = x;
+        baseY[i] = y;
+        baseRadius[i] = Math.sqrt(x * x + y * y);
+        baseAngle[i] = Math.atan2(y, x);
+      }
+      return {
+        geo,
+        N,
+        baseX,
+        baseY,
+        baseRadius,
+        baseAngle,
+        events: [],
+        // Stagger initial spawn across rings so they don't all pop in
+        // unison on the first frame.
+        nextSpawnAt: 0,
+      };
     });
   }, [rings]);
 
-  // Cache CanvasTextures for the labels (one per unique label string).
+  // Initialize spawn clocks once we know `performance.now()` at mount.
+  useEffect(() => {
+    const now =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
+    runtimes.forEach((rt, i) => {
+      const stagger = (rings[i].accent ? 1500 : 2500) * Math.random();
+      rt.nextSpawnAt = now + stagger;
+    });
+  }, [runtimes, rings]);
+
+  // Per-frame: evolve events and rewrite vertex buffers.
+  useFrame(() => {
+    const now =
+      typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+    for (let r = 0; r < runtimes.length; r++) {
+      const rt = runtimes[r];
+      const spec = rings[r];
+
+      // 1. Cull expired events (in-place compaction; no allocation).
+      let writeIdx = 0;
+      for (let i = 0; i < rt.events.length; i++) {
+        if (now < rt.events[i].end) {
+          if (writeIdx !== i) rt.events[writeIdx] = rt.events[i];
+          writeIdx++;
+        }
+      }
+      rt.events.length = writeIdx;
+
+      // 2. Spawn fresh events. Loop because a long frame could have skipped
+      //    multiple spawn windows.
+      while (now >= rt.nextSpawnAt) {
+        const spawnAt = rt.nextSpawnAt;
+        // 88% outward spike, 12% inward dip — keeps the dominant shape
+        // "blipping outward" while occasional dips give variety.
+        const isOutward = Math.random() < 0.88;
+        const amplitude =
+          (isOutward ? 1 : -1) * (0.32 + Math.random() * 0.55);
+        const rise = 70 + Math.random() * 130; // 70-200 ms
+        const decay = 380 + Math.random() * 620; // 380-1000 ms
+        rt.events.push({
+          birth: spawnAt,
+          peak: spawnAt + rise,
+          end: spawnAt + rise + decay,
+          angle: Math.random() * Math.PI * 2 * spec.arc,
+          amplitude,
+          width: 0.04 + Math.random() * 0.04, // 2.3°-4.6°
+        });
+        const minGap = spec.accent ? 800 : 1500;
+        const maxGap = spec.accent ? 2500 : 4000;
+        rt.nextSpawnAt = spawnAt + minGap + Math.random() * (maxGap - minGap);
+      }
+
+      // 3. Recompute vertex positions: base + sum-of-active-event displacements.
+      const pos = rt.geo.attributes.position;
+      const arr = pos.array as Float32Array;
+      const N = rt.N;
+      const events = rt.events;
+      const eventCount = events.length;
+      const PI2 = Math.PI * 2;
+
+      for (let i = 0; i < N; i++) {
+        const a = rt.baseAngle[i];
+        let disp = 0;
+        for (let e = 0; e < eventCount; e++) {
+          const ev = events[e];
+          // Time envelope (asymmetric: linear rise 0..1, linear decay 1..0).
+          let env: number;
+          if (now < ev.peak) {
+            env = (now - ev.birth) / (ev.peak - ev.birth);
+          } else {
+            env = 1 - (now - ev.peak) / (ev.end - ev.peak);
+          }
+          if (env <= 0) continue;
+          // Spatial Gaussian with angular wrap.
+          let d = a - ev.angle;
+          if (d > Math.PI) d -= PI2;
+          else if (d < -Math.PI) d += PI2;
+          const sigma = ev.width;
+          // Skip vertices outside the spike's footprint — saves the exp().
+          if (d > sigma * 4 || d < -sigma * 4) continue;
+          disp += ev.amplitude * env * Math.exp(-(d * d) / (2 * sigma * sigma));
+        }
+        const r0 = rt.baseRadius[i];
+        if (r0 > 1e-6) {
+          const factor = (r0 + disp) / r0;
+          // Direct array writes — ~3× faster than pos.setX/.setY on tight
+          // loops. Vertex layout is [x, y, z, x, y, z, ...].
+          arr[i * 3] = rt.baseX[i] * factor;
+          arr[i * 3 + 1] = rt.baseY[i] * factor;
+        }
+      }
+      pos.needsUpdate = true;
+    }
+  });
+
+  // Label textures — one per unique depth string ("200", "400", ...).
   const labelTextures = useMemo(() => {
     const map = new Map<string, CanvasTexture>();
     for (const r of rings) {
@@ -372,21 +428,17 @@ function DepthRings() {
   // Dispose GPU resources on unmount.
   useEffect(() => {
     return () => {
-      geometries.forEach((g) => g.dispose());
+      runtimes.forEach((rt) => rt.geo.dispose());
       labelTextures.forEach((t) => t.dispose());
     };
-  }, [geometries, labelTextures]);
+  }, [runtimes, labelTextures]);
 
   return (
     <group>
       {rings.map((r, i) => (
         <group key={r.y} position={[r.cx, r.y, r.cz]}>
-          {/* Inner group composes: rotate around world Y to set arc start
-              position, then add small X/Z tilts. The leaf mesh's
-              [PI/2, 0, 0] rotation flips the torus from XY plane to
-              horizontal. */}
           <group rotation={[r.tiltX, r.arcRotY, r.tiltZ]}>
-            <mesh rotation={[Math.PI / 2, 0, 0]} geometry={geometries[i]}>
+            <mesh rotation={[Math.PI / 2, 0, 0]} geometry={runtimes[i].geo}>
               <meshBasicMaterial
                 color={r.accent ? '#7a8a98' : '#4a463f'}
                 transparent
@@ -395,10 +447,6 @@ function DepthRings() {
               />
             </mesh>
           </group>
-          {/* Depth label — sits just past the ring's right side at its own
-              y level. Sprites always face the camera so it's readable from
-              any descent angle. Position is in the un-tilted outer group so
-              labels stay on a clean vertical column. */}
           {r.label && labelTextures.get(r.label) && (
             <sprite
               position={[r.radius + 1.4, 0, 0]}
