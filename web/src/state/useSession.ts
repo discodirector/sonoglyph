@@ -90,6 +90,9 @@ interface SessionState {
   // --- client-owned ---
   depth: number;
   selectedPreset: LayerType;
+  /** Per-type mix gains (0..1.5). 1.0 = unity. Mirrored in audio engine
+   *  via setLayerVolume; the UI EQ panel reads + writes here. */
+  layerVolumes: Record<LayerType, number>;
   proxyOk: boolean | null;
   recording: boolean;
   startedAt: number | null;
@@ -113,6 +116,7 @@ interface SessionState {
   // --- client setters ---
   setDepth: (d: number) => void;
   setSelectedPreset: (t: LayerType) => void;
+  setLayerVolume: (t: LayerType, value: number) => void;
   setProxyOk: (ok: boolean) => void;
   setRecording: (r: boolean) => void;
   pushEvent: (e: PendingEvent) => void;
@@ -131,6 +135,10 @@ export const useSession = create<SessionState>((set) => ({
 
   depth: 0,
   selectedPreset: 'drone',
+  layerVolumes: Object.fromEntries(LAYER_TYPES.map((t) => [t, 1])) as Record<
+    LayerType,
+    number
+  >,
   proxyOk: null,
   recording: false,
   startedAt: null,
@@ -197,6 +205,8 @@ export const useSession = create<SessionState>((set) => ({
 
   setDepth: (d) => set({ depth: d }),
   setSelectedPreset: (t) => set({ selectedPreset: t }),
+  setLayerVolume: (t, value) =>
+    set((s) => ({ layerVolumes: { ...s.layerVolumes, [t]: value } })),
   setProxyOk: (ok) => set({ proxyOk: ok }),
   setRecording: (r) => set({ recording: r }),
   pushEvent: (e) =>

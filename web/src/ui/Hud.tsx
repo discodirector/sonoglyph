@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { LAYER_TYPES, useSession } from '../state/useSession';
 import type { LayerType } from '../state/useSession';
 
@@ -193,11 +193,20 @@ function CooldownBar({
   agentTurn: boolean;
 }) {
   const left = useCooldownLeft(cooldownEndsAt);
-  if (!cooldownEndsAt || left <= 0) {
+  // Snapshot the *perceived* duration at the moment this cooldown began,
+  // rather than trusting a fixed COOLDOWN_MS constant. Server writes
+  // `cooldownEndsAt = Date.now() + 10000` against its own clock; if the VPS
+  // clock is even a couple seconds behind the user's machine, the client's
+  // first reading of `left` is already ~7000 and the bar would visually
+  // start at 30%. Measuring against the client's perception keeps the
+  // animation a clean 0% → 100% regardless of NTP skew.
+  const total = useMemo(() => {
+    if (cooldownEndsAt === null) return null;
+    return Math.max(1000, cooldownEndsAt - Date.now());
+  }, [cooldownEndsAt]);
+  if (!cooldownEndsAt || left <= 0 || total === null) {
     return <div style={{ height: 2, background: 'rgba(255,255,255,0.06)' }} />;
   }
-  // Estimate progress assuming 10s window; actual remaining vs total.
-  const total = 10000;
   const progress = Math.max(0, Math.min(1, 1 - left / total));
   // Same cyan as the "HERMES IS LISTENING" label while it's the agent's
   // turn; warm orange while the player is in cooldown.

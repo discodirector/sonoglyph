@@ -23,7 +23,7 @@
  */
 
 import * as Tone from 'tone';
-import type { LayerType } from '../state/useSession';
+import { LAYER_TYPES, type LayerType } from '../state/useSession';
 
 // -----------------------------------------------------------------------------
 // Module state — initialized once, after first user gesture.
@@ -38,6 +38,13 @@ let reverb: Tone.Reverb;
 let reverbSend: Tone.Gain;
 let analyzer: Tone.Analyser;
 let recorder: Tone.Recorder | null = null;
+
+// Per-type mix buses. Built once in initAudio. Each layer's panner routes
+// to its type's bus, and the bus routes to BOTH master (dry) and reverbSend
+// (wet) — so muting a type via the EQ also silences its reverb tail. The
+// session store mirrors these gains so the UI can drive them; on init we
+// re-apply whatever the user had set.
+const typeBuses: Map<LayerType, Tone.Gain> = new Map();
 
 export async function initAudio(): Promise<void> {
   if (initialized) return;
@@ -65,6 +72,16 @@ export async function initAudio(): Promise<void> {
   reverbSend = new Tone.Gain(0.35);
   reverbSend.connect(reverb);
 
+  // One Gain per layer type. Sits between every layer's panner and the
+  // master limiter; also feeds the reverb send so muted types don't leave
+  // a wet ghost behind. Default 1.0; the UI can change them via setLayerVolume.
+  for (const type of LAYER_TYPES) {
+    const bus = new Tone.Gain(1);
+    bus.connect(master);
+    bus.connect(reverbSend);
+    typeBuses.set(type, bus);
+  }
+
   analyzer = new Tone.Analyser('fft', 64);
   master.connect(analyzer); // pre-duck, pre-voice — measures layers only
 
@@ -72,6 +89,18 @@ export async function initAudio(): Promise<void> {
   Tone.getTransport().start();
 
   initialized = true;
+}
+
+/**
+ * Per-type volume control for the EQ panel. Value 0..1.5 (1.0 = unity).
+ * Cheap to call — ramps the bus gain over 50ms so dragging a slider doesn't
+ * click. No-op before initAudio().
+ */
+export function setLayerVolume(type: LayerType, value: number): void {
+  if (!initialized) return;
+  const bus = typeBuses.get(type);
+  if (!bus) return;
+  bus.gain.rampTo(Math.max(0, Math.min(2, value)), 0.05);
 }
 
 export function isAudioReady(): boolean {
@@ -776,8 +805,17 @@ export function addLayer(
   });
 
   preset.output.connect(panner);
-  panner.connect(master);
-  panner.connect(reverbSend);
+  // Route via the per-type mix bus so the EQ panel can fade types in/out.
+  // Bus already feeds master + reverbSend, so we only connect once here.
+  // Fallback to master directly is just defensive — the bus map is populated
+  // in initAudio for every LayerType.
+  const bus = typeBuses.get(type);
+  if (bus) {
+    panner.connect(bus);
+  } else {
+    panner.connect(master);
+    panner.connect(reverbSend);
+  }
 
   return {
     id: layerId,

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Scene } from './scene/Scene';
 import { Hud } from './ui/Hud';
+import { Mixer } from './ui/Mixer';
 import { Intro } from './ui/Intro';
 import { Finale } from './ui/Finale';
 import { LAYER_TYPES, useSession } from './state/useSession';
@@ -186,6 +187,7 @@ export function App() {
       <Scene onPlace={handlePlace} />
       {phase === 'intro' && <Intro onBegin={handleBegin} />}
       {phase === 'playing' && <Hud />}
+      {phase === 'playing' && <Mixer />}
       {phase === 'finished' && <Finale />}
     </>
   );
