@@ -26,10 +26,9 @@ import type { LayerType, PlacedLayer } from '../state/useSession';
  *
  *   - `pulse` — a wide outer ring + an extruded heart at its centre.
  *     The heart pulses with a lub-dub heartbeat synced loosely to the
- *     audio loop's cadence; the outer ring breathes very gently around it.
- *     A NoiseAura adds a sparkle halo so the silhouette doesn't read as
- *     just decoration. A torus-knot was geometrically interesting but
- *     read as decoration, not rhythm.
+ *     audio loop's cadence; the outer ring breathes very gently around
+ *     it. A torus-knot was geometrically interesting but read as
+ *     decoration, not rhythm.
  *
  *   - `breath` — a particle cone that emits from a point and expands
  *     outward along +Y. Each particle ages from 0 → lifespan; position =
@@ -63,7 +62,7 @@ const PALETTE: Record<
 > = {
   drone: { emissive: '#8aa1b3', color: '#0e1820', intensity: 0.7 },
   texture: { emissive: '#aab0a8', color: '#1a1c1d', intensity: 0.6 },
-  pulse: { emissive: '#c9885b', color: '#1f1410', intensity: 0.95 },
+  pulse: { emissive: '#cc5d4d', color: '#1f0c0a', intensity: 0.95 },
   glitch: { emissive: '#7be0d4', color: '#062322', intensity: 1.0 },
   breath: { emissive: '#d4a098', color: '#1f1413', intensity: 0.55 },
   bell: { emissive: '#e8c97a', color: '#1f1808', intensity: 1.1 },
@@ -519,12 +518,6 @@ function PulseHeart({ layer }: { layer: PlacedLayer }) {
 
   return (
     <group ref={groupRef} position={layer.position}>
-      {/* Dust aura — fine specks tightly clustered around the heart at the
-          centre of the ring, so pulse reads as "throbbing in a haze". Shell
-          radius 0.45 sits inside the ring (0.85) and around the heart
-          (~0.4 wide). Rotates with the group's slow Z spin so the whole
-          thing feels like a single living object. */}
-      <NoiseAura type="pulse" radius={0.45} count={70} size={0.03} />
       {/* Outer ring — thin, wide, frames the heart */}
       <mesh ref={outerRef}>
         <torusGeometry args={[0.85, 0.025, 8, 48]} />

@@ -227,7 +227,7 @@ function CooldownBar({
 const presetColors: Record<LayerType, string> = {
   drone: '#8aa1b3',
   texture: '#aab0a8',
-  pulse: '#c9885b',
+  pulse: '#cc5d4d',
   glitch: '#7be0d4',
   breath: '#d4a098',
   // Day 6 expansion — colors match the orb emissives in scene/Layer.tsx
