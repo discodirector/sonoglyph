@@ -1,44 +1,60 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import type { Group, Mesh, Points } from 'three';
+import {
+  ExtrudeGeometry,
+  type Group,
+  type InstancedMesh,
+  type Mesh,
+  Object3D,
+  type Points,
+  Shape,
+} from 'three';
 import type { LayerType, PlacedLayer } from '../state/useSession';
 
 /**
  * Visual stand-in for a sound layer.
  *
  * Most types render as a single mesh whose geometry + material + per-frame
- * animation are all keyed off `layer.type`. Two types break out of that
+ * animation are all keyed off `layer.type`. Three types break out of that
  * pattern because their visual identity demands more than one drawcall:
  *
- *   - `texture` — a particle cloud (<points>). Atmospheric/grainy presence
- *     reads as "many specks of dust", not as a solid object. A sphere or
- *     icosahedron simply can't communicate that.
+ *   - `texture` — a swarm of tiny octahedrons (<instancedMesh>) with
+ *     per-instance rotation jitter. Reads as "many dust crystals" rather
+ *     than a solid object — and the jitter ties it audibly to glitch/bell
+ *     while keeping its own identity (many, small, slow).
  *
- *   - `pulse` — two concentric rings (a <group> of two thin tori). The
- *     visual heartbeat needs an inner stable ring + an outer one whose
- *     radius oscillates with the audio loop. A torus-knot was geometrically
- *     interesting but read as "decorative knot", not "rhythm".
+ *   - `pulse` — a wide outer ring + an extruded heart at its centre.
+ *     The heart pulses with a lub-dub heartbeat synced loosely to the
+ *     audio loop's cadence; the outer ring breathes very gently around it.
+ *     A torus-knot was geometrically interesting but read as decoration,
+ *     not rhythm.
+ *
+ *   - `breath` — a particle cone that emits from a point and expands
+ *     outward along +Y. Each particle ages from 0 → lifespan; position =
+ *     direction × speed × age. Particles respawn at age=0 (back at the
+ *     source) so the cone looks continuous. Reads instantly as "exhale".
  *
  * The dispatch happens at LayerOrb top level so neither special case
  * pollutes the SingleOrb code path or the shared animateByType switch.
  */
 export function LayerOrb({ layer }: { layer: PlacedLayer }) {
   if (layer.type === 'texture') return <TextureCloud layer={layer} />;
-  if (layer.type === 'pulse') return <PulseRings layer={layer} />;
+  if (layer.type === 'pulse') return <PulseHeart layer={layer} />;
+  if (layer.type === 'breath') return <BreathCone layer={layer} />;
   return <SingleOrb layer={layer} />;
 }
 
 // ---------------------------------------------------------------------------
 // Shared per-type palette — emissive/color/intensity. Used by SingleOrb's
-// Material AND by TextureCloud / PulseRings so all three render paths
-// stay visually in sync (and match the HUD presetColors map in Hud.tsx).
+// Material AND by the three custom components so all render paths stay in
+// sync (and match the HUD presetColors map in Hud.tsx).
 // ---------------------------------------------------------------------------
 const PALETTE: Record<
   LayerType,
   { emissive: string; color: string; intensity: number }
 > = {
   drone: { emissive: '#8aa1b3', color: '#0e1820', intensity: 0.7 },
-  texture: { emissive: '#aab0a8', color: '#1a1c1d', intensity: 0.45 },
+  texture: { emissive: '#aab0a8', color: '#1a1c1d', intensity: 0.6 },
   pulse: { emissive: '#c9885b', color: '#1f1410', intensity: 0.95 },
   glitch: { emissive: '#7be0d4', color: '#062322', intensity: 1.0 },
   breath: { emissive: '#d4a098', color: '#1f1413', intensity: 0.55 },
@@ -49,8 +65,8 @@ const PALETTE: Record<
 };
 
 // ---------------------------------------------------------------------------
-// SingleOrb — covers 7 of 9 types: drone, glitch, breath, bell, drip,
-// swell, chord. (texture + pulse have their own components above.)
+// SingleOrb — covers 6 of 9 types: drone, glitch, bell, drip, swell, chord.
+// (texture, pulse, breath have their own components.)
 // ---------------------------------------------------------------------------
 function SingleOrb({ layer }: { layer: PlacedLayer }) {
   const ref = useRef<Mesh>(null);
@@ -70,27 +86,21 @@ function SingleOrb({ layer }: { layer: PlacedLayer }) {
 
 function Geometry({ type }: { type: LayerType }) {
   switch (type) {
-    // Drone — dodecahedron with larger radius than the prior icosahedron.
-    // Twelve pentagonal faces read as "geological boulder" rather than
-    // "generic faceted ball". Paired with a no-rotation, deep-breath
-    // animation in animateByType for a grounded, immobile feel.
     case 'drone':
+      // Dodecahedron — heavier than the prior icosahedron, twelve pentagonal
+      // faces read as "geological boulder" rather than "generic die".
       return <dodecahedronGeometry args={[0.62, 0]} />;
-    // Texture — unreachable. LayerOrb dispatches texture to TextureCloud
-    // before SingleOrb mounts. Fallback only exists to satisfy the
-    // exhaustive switch and to avoid the optional-return TS surprise.
+    // texture / pulse / breath — unreachable. LayerOrb dispatches them to
+    // their own components before SingleOrb mounts. Fallback geometries
+    // exist only to satisfy the exhaustive switch.
     case 'texture':
       return <sphereGeometry args={[0.5, 8, 8]} />;
-    // Pulse — likewise unreachable, dispatched to PulseRings.
     case 'pulse':
       return <torusGeometry args={[0.4, 0.05, 8, 24]} />;
-    case 'glitch':
-      return <tetrahedronGeometry args={[0.5, 0]} />;
-    // Breath — vertical capsule. The capsule axis is Y by default in
-    // Three.js (since r140); we breathe through diameter (X/Z scale)
-    // rather than length, which reads as a lung filling, not stretching.
     case 'breath':
       return <capsuleGeometry args={[0.32, 0.55, 4, 12]} />;
+    case 'glitch':
+      return <tetrahedronGeometry args={[0.5, 0]} />;
     case 'bell':
       return <octahedronGeometry args={[0.55, 0]} />;
     case 'drip':
@@ -104,9 +114,6 @@ function Geometry({ type }: { type: LayerType }) {
 
 function Material({ type }: { type: LayerType }) {
   const p = PALETTE[type];
-  // Bell + chord lean a bit metallic; pulse keeps its prior 0.4 even though
-  // the visual is now PulseRings (which has its own material). Glitch + bell
-  // get reduced roughness for a sharper, more reflective look.
   const metalness =
     type === 'pulse' || type === 'bell' || type === 'chord' ? 0.4 : 0.1;
   const roughness = type === 'glitch' || type === 'bell' ? 0.3 : 0.6;
@@ -124,21 +131,18 @@ function Material({ type }: { type: LayerType }) {
 function animateByType(mesh: Mesh, layer: PlacedLayer, t: number) {
   switch (layer.type) {
     case 'drone': {
-      // Slow, deep breath. Period 8s (angular freq π/4), amplitude 0.075
-      // → scale oscillates between 0.90 and 1.05. NO rotation — drone is
-      // supposed to feel like a stationary mass, not an active object.
+      // Slow, deep breath. Period 8s, scale oscillates 0.90↔1.05. NO
+      // rotation — drone is a stationary mass, not an active object.
       const breathe = 0.975 + Math.sin((t * Math.PI) / 4) * 0.075;
       mesh.scale.setScalar(breathe);
       return;
     }
     case 'texture':
-      // Handled by TextureCloud — never reached.
-      return;
     case 'pulse':
-      // Handled by PulseRings — never reached.
+    case 'breath':
+      // Handled by their own components.
       return;
     case 'glitch': {
-      // Jittered rotation — occasional snap, otherwise still.
       if (Math.random() < 0.04) {
         mesh.rotation.x += (Math.random() - 0.5) * 0.6;
         mesh.rotation.y += (Math.random() - 0.5) * 0.6;
@@ -147,17 +151,7 @@ function animateByType(mesh: Mesh, layer: PlacedLayer, t: number) {
       mesh.scale.setScalar(flicker);
       return;
     }
-    case 'breath': {
-      // Diameter pulses (X/Z); length (Y) stays constant. The capsule
-      // looks like a small lung filling and emptying. Slow Y rotation
-      // adds a hint of life without becoming a spinning prop.
-      const breath = 1 + Math.sin(t * 0.55) * 0.15;
-      mesh.scale.set(breath, 1, breath);
-      mesh.rotation.y += 0.0006;
-      return;
-    }
     case 'bell': {
-      // Slow rotation + faint metallic shimmer.
       mesh.rotation.y += 0.004;
       mesh.rotation.z += 0.001;
       const shimmer = 0.96 + Math.sin(t * 1.4) * 0.04;
@@ -165,8 +159,6 @@ function animateByType(mesh: Mesh, layer: PlacedLayer, t: number) {
       return;
     }
     case 'drip': {
-      // Mostly still; occasional sharp downward "drip" — quick squash on
-      // Y followed by a slower restore via component-wise lerp toward 1.
       if (Math.random() < 0.025) {
         mesh.scale.set(1.1, 0.55, 1.1);
       } else {
@@ -178,7 +170,6 @@ function animateByType(mesh: Mesh, layer: PlacedLayer, t: number) {
       return;
     }
     case 'swell': {
-      // Long expansion/contraction matching the audio's 10-second LFO.
       const wave = 0.85 + Math.sin(t * 0.6) * 0.25;
       mesh.scale.setScalar(wave);
       mesh.rotation.x = Math.sin(t * 0.25) * 0.4;
@@ -186,8 +177,6 @@ function animateByType(mesh: Mesh, layer: PlacedLayer, t: number) {
       return;
     }
     case 'chord': {
-      // Three-fold breath nods at the three partials; two-axis rotation
-      // keeps the halo reading as a ring rather than a flat disc.
       const breathe = 0.92 + Math.sin(t * 0.35) * 0.06;
       mesh.scale.setScalar(breathe);
       mesh.rotation.x += 0.002;
@@ -198,97 +187,184 @@ function animateByType(mesh: Mesh, layer: PlacedLayer, t: number) {
 }
 
 // ---------------------------------------------------------------------------
-// TEXTURE — particle cloud.
+// TEXTURE — swarm of tiny octahedrons.
 //
-// 50 unlit points distributed inside a sphere of radius ~0.8 around the
-// layer's position. The cloud rotates slowly on Y + tilts on X, with a
-// subtle scale drift. Particles use `pointsMaterial` (no PBR — points
-// can't be lit), so we set `toneMapped: false` and rely on the emissive
-// color value directly to make them legible against the dark scene.
+// 35 instances of a small octahedron (radius 0.05) distributed in a sphere
+// of radius ~0.85 around the layer's position. Each instance has its own
+// stable position and an independently jittering rotation — every frame
+// each octahedron has a small chance to snap to a new rotation, which
+// gives the cloud the same "noisy" feel as the glitch and bell orbs while
+// remaining a distinct silhouette family (many, tiny, distributed).
 //
-// Particle layout is generated once per layer (memoized on layer.id) so
-// the cloud doesn't reshuffle every frame. Each layer ends up with a
-// stable, unique distribution.
+// Rendered via <instancedMesh> so all 35 octs share one drawcall. Position
+// + per-instance state is generated once on mount (memoized on layer.id).
 // ---------------------------------------------------------------------------
-const TEXTURE_PARTICLE_COUNT = 50;
+const TEXTURE_INSTANCE_COUNT = 35;
+
+interface TextureInstance {
+  pos: [number, number, number];
+  rot: [number, number, number];
+  scale: number;
+  phase: number;
+}
 
 function TextureCloud({ layer }: { layer: PlacedLayer }) {
-  const ref = useRef<Points>(null);
+  const ref = useRef<InstancedMesh>(null);
+  const dummy = useMemo(() => new Object3D(), []);
 
-  const positions = useMemo(() => {
-    const arr = new Float32Array(TEXTURE_PARTICLE_COUNT * 3);
-    for (let i = 0; i < TEXTURE_PARTICLE_COUNT; i++) {
-      // Roughly uniform sphere distribution — random radius + spherical
-      // angles. Not perfectly uniform (proper uniformity would use cube
-      // root on r) but at this scale the eye doesn't notice.
-      const r = 0.35 + Math.random() * 0.5;
+  const instances = useMemo<TextureInstance[]>(() => {
+    return Array.from({ length: TEXTURE_INSTANCE_COUNT }, () => {
+      // Roughly uniform sphere distribution.
+      const r = 0.3 + Math.random() * 0.55;
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(2 * Math.random() - 1);
-      arr[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-      arr[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
-      arr[i * 3 + 2] = r * Math.cos(phi);
-    }
-    return arr;
+      return {
+        pos: [
+          r * Math.sin(phi) * Math.cos(theta),
+          r * Math.sin(phi) * Math.sin(theta),
+          r * Math.cos(phi),
+        ],
+        rot: [
+          Math.random() * Math.PI,
+          Math.random() * Math.PI,
+          Math.random() * Math.PI,
+        ],
+        scale: 0.7 + Math.random() * 0.6,
+        phase: Math.random() * Math.PI * 2,
+      };
+    });
+    // Layer id changes only when a new layer is created — effectively never
+    // during this component's lifetime.
   }, [layer.id]);
 
   useFrame((s) => {
     if (!ref.current) return;
     const t = s.clock.elapsedTime;
-    ref.current.rotation.y = t * 0.08;
-    ref.current.rotation.x = Math.sin(t * 0.12) * 0.3;
-    const drift = 0.95 + Math.sin(t * 0.4) * 0.05;
-    ref.current.scale.setScalar(drift);
+
+    // Whole cloud rotates slowly so the swarm reads as alive.
+    ref.current.rotation.y = t * 0.06;
+    ref.current.rotation.x = Math.sin(t * 0.08) * 0.15;
+
+    for (let i = 0; i < TEXTURE_INSTANCE_COUNT; i++) {
+      const inst = instances[i];
+      // Per-instance noise — same idea as glitch's 4% snap, dialed down to
+      // 1.5% so the cloud shimmers rather than convulses.
+      if (Math.random() < 0.015) {
+        inst.rot[0] += (Math.random() - 0.5) * 0.7;
+        inst.rot[1] += (Math.random() - 0.5) * 0.7;
+        inst.rot[2] += (Math.random() - 0.5) * 0.4;
+      }
+      // Subtle per-instance breathing keyed to its phase so they don't
+      // pulse in unison.
+      const breathe = 0.85 + Math.sin(t * 0.6 + inst.phase) * 0.15;
+      dummy.position.set(inst.pos[0], inst.pos[1], inst.pos[2]);
+      dummy.rotation.set(inst.rot[0], inst.rot[1], inst.rot[2]);
+      dummy.scale.setScalar(inst.scale * breathe);
+      dummy.updateMatrix();
+      ref.current.setMatrixAt(i, dummy.matrix);
+    }
+    ref.current.instanceMatrix.needsUpdate = true;
   });
 
   const p = PALETTE.texture;
 
   return (
-    <points ref={ref} position={layer.position}>
-      <bufferGeometry>
-        <bufferAttribute
-          attach="attributes-position"
-          args={[positions, 3]}
-        />
-      </bufferGeometry>
-      <pointsMaterial
-        size={0.045}
-        color={p.emissive}
-        transparent
-        opacity={0.85}
-        sizeAttenuation
-        toneMapped={false}
+    <instancedMesh
+      ref={ref}
+      args={[undefined, undefined, TEXTURE_INSTANCE_COUNT]}
+      position={layer.position}
+    >
+      <octahedronGeometry args={[0.05, 0]} />
+      <meshStandardMaterial
+        emissive={p.emissive}
+        emissiveIntensity={p.intensity}
+        color={p.color}
+        roughness={0.4}
+        metalness={0.2}
       />
-    </points>
+    </instancedMesh>
   );
 }
 
 // ---------------------------------------------------------------------------
-// PULSE — concentric rings.
+// PULSE — wide outer ring + heartbeating heart.
 //
-// Inner ring: stable, narrow torus at radius 0.30. Outer ring: narrower
-// torus at radius 0.55, with its scale oscillating in time with the audio
-// loop's ~5s heartbeat (engine.ts buildPulse uses a 4–7.5s interval; the
-// 0.6 rad/s oscillation here gives ~5.2s per beat-cycle, close enough that
-// audio + visual feel coupled without us actually wiring them).
+// The outer ring (radius 0.85, very thin) breathes gently — barely 5%
+// scale variation over a slow 6-sec cycle, so it acts as an arena that
+// frames the heart inside. The heart is a small extruded shape (~0.4
+// across), pumped by an explicit lub-dub envelope: a strong "lub" beat
+// at phase 0.0–0.2 of each ~1s cycle, a smaller "dub" at 0.2–0.4, then
+// flat. This is the unmistakable two-stage cardiac rhythm — much more
+// readable than a smooth sine pulse.
 //
-// The whole group rotates slowly on Z (and a hint on Y) so the rings stay
-// alive between beats without distracting from the pulse itself.
+// The whole group rotates very slowly on Z so the composition stays
+// alive between beats but the heart's orientation never strays far from
+// upright.
 // ---------------------------------------------------------------------------
-function PulseRings({ layer }: { layer: PlacedLayer }) {
+function makeHeartShape(): Shape {
+  const s = new Shape();
+  // Heart drawn in a normalized box, cleft up at +Y, point down at -Y.
+  // Curve coordinates from the canonical Three.js heart example.
+  s.moveTo(0, 0);
+  s.bezierCurveTo(0, 0, -0.5, -0.4, -1, 0);
+  s.bezierCurveTo(-1.5, 0.4, -0.5, 1, 0, 1.5);
+  s.bezierCurveTo(0.5, 1, 1.5, 0.4, 1, 0);
+  s.bezierCurveTo(0.5, -0.4, 0, 0, 0, 0);
+  return s;
+}
+
+function PulseHeart({ layer }: { layer: PlacedLayer }) {
   const groupRef = useRef<Group>(null);
+  const heartRef = useRef<Mesh>(null);
   const outerRef = useRef<Mesh>(null);
+
+  // Build the extruded heart geometry once per layer. We center the geom
+  // on its bounding box so the heart pivots around its visual middle, not
+  // around the shape's drawing origin (which sits on the bottom point).
+  const heartGeom = useMemo(() => {
+    const g = new ExtrudeGeometry(makeHeartShape(), {
+      depth: 0.08,
+      bevelEnabled: false,
+      curveSegments: 16,
+    });
+    g.scale(0.22, -0.22, 0.22); // negative Y flips so cleft is up to camera
+    g.center();
+    return g;
+  }, []);
 
   useFrame((s) => {
     const t = s.clock.elapsedTime;
+
+    // Outer ring — very gentle breathing so it doesn't compete with the
+    // heart's beat. Period 6s, amplitude 0.05.
     if (outerRef.current) {
-      // |sin| gives a "ping" that hits the peak briefly and returns to 1
-      // — closer to a heartbeat than a smooth sine sweep.
-      const pulse = 1 + Math.abs(Math.sin(t * 0.6)) * 0.45;
-      outerRef.current.scale.setScalar(pulse);
+      const breathe = 1 + Math.sin(t * 1.05) * 0.05;
+      outerRef.current.scale.setScalar(breathe);
     }
+
+    // Heart — explicit lub-dub envelope. Period 1.0s, two distinct beats.
+    if (heartRef.current) {
+      const phase = t % 1.0;
+      let beat = 0;
+      if (phase < 0.08) {
+        // Lub up
+        beat = (phase / 0.08) * 0.45;
+      } else if (phase < 0.18) {
+        // Lub down
+        beat = 0.45 - ((phase - 0.08) / 0.1) * 0.42;
+      } else if (phase < 0.28) {
+        // Dub up (smaller)
+        beat = 0.03 + ((phase - 0.18) / 0.1) * 0.27;
+      } else if (phase < 0.42) {
+        // Dub down
+        beat = 0.3 - ((phase - 0.28) / 0.14) * 0.3;
+      }
+      // else flat at 0
+      heartRef.current.scale.setScalar(1 + beat);
+    }
+
     if (groupRef.current) {
-      groupRef.current.rotation.z += 0.003;
-      groupRef.current.rotation.y += 0.0015;
+      groupRef.current.rotation.z += 0.0012;
     }
   });
 
@@ -296,28 +372,114 @@ function PulseRings({ layer }: { layer: PlacedLayer }) {
 
   return (
     <group ref={groupRef} position={layer.position}>
-      {/* Inner stable ring */}
-      <mesh>
-        <torusGeometry args={[0.3, 0.04, 8, 24]} />
+      {/* Outer ring — thin, wide, frames the heart */}
+      <mesh ref={outerRef}>
+        <torusGeometry args={[0.85, 0.025, 8, 48]} />
         <meshStandardMaterial
           emissive={p.emissive}
-          emissiveIntensity={p.intensity}
+          emissiveIntensity={p.intensity * 0.7}
           color={p.color}
           roughness={0.6}
           metalness={0.4}
         />
       </mesh>
-      {/* Outer pulsing ring — slightly dimmer so the inner one anchors the eye */}
-      <mesh ref={outerRef}>
-        <torusGeometry args={[0.55, 0.03, 8, 32]} />
+      {/* Heart — extruded shape, pulses with explicit lub-dub */}
+      <mesh ref={heartRef} geometry={heartGeom}>
         <meshStandardMaterial
           emissive={p.emissive}
-          emissiveIntensity={p.intensity * 0.85}
+          emissiveIntensity={p.intensity * 1.15}
           color={p.color}
-          roughness={0.6}
-          metalness={0.4}
+          roughness={0.5}
+          metalness={0.5}
         />
       </mesh>
     </group>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BREATH — conical particle emission.
+//
+// 60 particles. Each has a fixed direction (within a 35° cone around +Y),
+// a fixed speed (0.25–0.6 u/s), and a cyclic age that runs 0 → lifespan
+// → 0. Position = direction × speed × age, so at age=0 the particle is at
+// the source (tightly clustered with its neighbours) and at age=lifespan
+// it's at the cone's far edge (well separated from them). Particles
+// respawn back at the source so the cone looks continuously emitting.
+//
+// Initial ages are staggered across [0, lifespan) so the cone is fully
+// populated from frame zero rather than starting empty and filling.
+//
+// Rendered as <points> with toneMapped=false so the rose colour pops on
+// the dark background.
+// ---------------------------------------------------------------------------
+const BREATH_PARTICLE_COUNT = 60;
+
+interface BreathParticle {
+  dir: [number, number, number];
+  speed: number;
+  lifespan: number;
+  age: number;
+}
+
+function BreathCone({ layer }: { layer: PlacedLayer }) {
+  const ref = useRef<Points>(null);
+
+  const particles = useMemo<BreathParticle[]>(() => {
+    const halfAngle = (Math.PI * 35) / 180;
+    return Array.from({ length: BREATH_PARTICLE_COUNT }, () => {
+      // Uniform sample within a cone around +Y. cosTheta ∈ [cos(halfAngle), 1].
+      const phi = Math.random() * Math.PI * 2;
+      const cosTheta = 1 - Math.random() * (1 - Math.cos(halfAngle));
+      const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta));
+      const lifespan = 2.5 + Math.random() * 1.8;
+      return {
+        dir: [sinTheta * Math.cos(phi), cosTheta, sinTheta * Math.sin(phi)],
+        speed: 0.25 + Math.random() * 0.35,
+        lifespan,
+        // Stagger initial ages so the cone is populated end-to-end on mount.
+        age: Math.random() * lifespan,
+      };
+    });
+  }, [layer.id]);
+
+  // Single mutable Float32Array — we write in place each frame and flag the
+  // attribute dirty. Size matches the buffer attached below.
+  const positions = useMemo(
+    () => new Float32Array(BREATH_PARTICLE_COUNT * 3),
+    [],
+  );
+
+  useFrame((_, delta) => {
+    if (!ref.current) return;
+    for (let i = 0; i < BREATH_PARTICLE_COUNT; i++) {
+      const p = particles[i];
+      p.age += delta;
+      if (p.age >= p.lifespan) p.age -= p.lifespan;
+      const dist = p.age * p.speed;
+      positions[i * 3] = p.dir[0] * dist;
+      positions[i * 3 + 1] = p.dir[1] * dist;
+      positions[i * 3 + 2] = p.dir[2] * dist;
+    }
+    const attr = ref.current.geometry.getAttribute('position');
+    attr.needsUpdate = true;
+  });
+
+  const p = PALETTE.breath;
+
+  return (
+    <points ref={ref} position={layer.position}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+      </bufferGeometry>
+      <pointsMaterial
+        size={0.06}
+        color={p.emissive}
+        transparent
+        opacity={0.9}
+        sizeAttenuation
+        toneMapped={false}
+      />
+    </points>
   );
 }
