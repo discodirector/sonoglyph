@@ -216,10 +216,16 @@ function animateByType(mesh: Mesh, layer: PlacedLayer, t: number) {
 // is what makes the spike profile readable.
 // ---------------------------------------------------------------------------
 
-const TEXTURE_PLANE_SIZE = 0.85;
-const TEXTURE_PLANE_SUBDIV = 16;
-const TEXTURE_SPIKE_COUNT = 38;
-const TEXTURE_SPIKE_BASE_HEIGHT = 0.15; // geometry height before per-instance scale
+// Sized to roughly match the visual footprint of the other layer types
+// when the camera is ~12-20 units away. Earlier 0.85 squares read as
+// "small grey patches" at typical descent distances.
+const TEXTURE_PLANE_SIZE = 1.7;
+const TEXTURE_PLANE_SUBDIV = 20;
+// Fewer but individually larger spikes — at 38 small spikes on a 1.7-square
+// plane the silhouette read as static fuzz; at 28 chunky spikes you can
+// actually count each triangular crystal poking through the surface.
+const TEXTURE_SPIKE_COUNT = 28;
+const TEXTURE_SPIKE_BASE_HEIGHT = 0.42; // geometry height before per-instance scale
 
 interface TextureSpike {
   x: number;
@@ -251,8 +257,10 @@ function TextureSurface({ layer }: { layer: PlacedLayer }) {
       TEXTURE_PLANE_SUBDIV,
     );
     const pos = g.attributes.position;
+    // Displacement scaled with plane size so the relative bumpiness stays
+    // consistent if the size is tuned later.
     for (let i = 0; i < pos.count; i++) {
-      pos.setZ(i, (Math.random() - 0.5) * 0.025);
+      pos.setZ(i, (Math.random() - 0.5) * 0.05);
     }
     pos.needsUpdate = true;
     g.computeVertexNormals();
@@ -278,13 +286,15 @@ function TextureSurface({ layer }: { layer: PlacedLayer }) {
   useFrame((s) => {
     const t = s.clock.elapsedTime;
 
-    // Slow oscillating tilt — show the texture from changing angles. Bias
-    // the X tilt slightly negative so the camera looks slightly DOWN onto
-    // the plane (it's mostly horizontal but pitched forward), which makes
-    // the spike profiles more visible than dead-on.
+    // Slow oscillating tilt — heavily biased so the plane is mostly seen
+    // at a steep angle. At rotation.x ≈ -0.7 rad (~40°) the plane is
+    // almost a parallelogram in screen space and the spikes silhouette
+    // crisply against the void above. Going more horizontal would make
+    // the spikes brighter against negative space but the plane itself
+    // loses readability; -0.7±0.4 keeps both visible.
     if (groupRef.current) {
-      groupRef.current.rotation.x = -0.25 + Math.sin(t * 0.18) * 0.35;
-      groupRef.current.rotation.y = Math.sin(t * 0.13) * 0.45;
+      groupRef.current.rotation.x = -0.7 + Math.sin(t * 0.18) * 0.4;
+      groupRef.current.rotation.y = Math.sin(t * 0.13) * 0.55;
     }
 
     if (!spikesRef.current) return;
@@ -326,7 +336,7 @@ function TextureSurface({ layer }: { layer: PlacedLayer }) {
       <mesh geometry={planeGeom}>
         <meshStandardMaterial
           emissive={p.emissive}
-          emissiveIntensity={p.intensity * 0.4}
+          emissiveIntensity={p.intensity * 0.55}
           color={p.color}
           roughness={0.7}
           metalness={0.1}
@@ -337,14 +347,16 @@ function TextureSurface({ layer }: { layer: PlacedLayer }) {
         ref={spikesRef}
         args={[undefined, undefined, TEXTURE_SPIKE_COUNT]}
       >
-        {/* radialSegments=3 → triangular pyramid (3 lateral triangles + base) */}
-        <coneGeometry args={[0.04, TEXTURE_SPIKE_BASE_HEIGHT, 3]} />
+        {/* radialSegments=3 → triangular pyramid (3 lateral triangles + base).
+            Wider base radius (0.09) makes each face of the pyramid large
+            enough to read at descent distances. */}
+        <coneGeometry args={[0.09, TEXTURE_SPIKE_BASE_HEIGHT, 3]} />
         <meshStandardMaterial
           emissive={p.emissive}
-          emissiveIntensity={p.intensity * 1.1}
+          emissiveIntensity={p.intensity * 1.5}
           color={p.color}
-          roughness={0.45}
-          metalness={0.25}
+          roughness={0.4}
+          metalness={0.3}
           flatShading
         />
       </instancedMesh>
