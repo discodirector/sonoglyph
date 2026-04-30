@@ -1,0 +1,13 @@
+# Foundry build output
+out/
+cache/
+broadcast/
+
+# Forge libraries — pinned via `forge install` and re-fetched on CI / fresh
+# checkouts via `forge install --no-git`. Tracking them as git submodules is
+# the Foundry default but not required.
+lib/
+
+# Local environment overrides
+.env
+.env.local
