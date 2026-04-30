@@ -42,7 +42,17 @@ function DescentCamera() {
   }, [camera]);
 
   useFrame((_, delta) => {
-    if (phase === 'playing') {
+    // Descend through 'finished' too. The moment the player places their
+    // last layer the server flips us to 'finished' and Kimi starts
+    // composing the artifact (journal + glyph) — that round-trip can take
+    // anywhere from a few seconds to ~30 s. If the camera froze on
+    // transition, the player would stare at their just-placed orb
+    // suspended mid-frame for the full wait, which reads as a crash.
+    // Continuing the descent at the same pace lets the orb — and the
+    // surrounding dust, rings, glyphs — drift out of frame naturally, so
+    // by the time Finale's art lands we're already coasting in a clean
+    // black void with only the journal/glyph above it.
+    if (phase === 'playing' || phase === 'finished') {
       const speed = 1000 / (6 * 60);
       camera.position.y -= speed * delta;
       setDepth(Math.max(0, -camera.position.y));
@@ -115,6 +125,12 @@ function DepthMarkers() {
 function ParallaxDust() {
   const meshRef = useRef<InstancedMesh>(null);
   const camera = useThree((s) => s.camera);
+  // Stop recycling once we cross into 'finished'. The camera keeps
+  // descending (see DescentCamera), so anything currently below simply
+  // drifts up out of frame and is never replaced — the band thins to
+  // nothing in ~10 s. That's the "particles flew away" beat the outro
+  // needs without any extra animation logic.
+  const phase = useSession((s) => s.phase);
   const N = 140;
   const dummy = useMemo(() => new Object3D(), []);
   const instances = useMemo(() => {
@@ -135,11 +151,13 @@ function ParallaxDust() {
   useFrame(() => {
     if (!meshRef.current) return;
     const camY = camera.position.y;
+    const recycling = phase !== 'finished';
     for (let i = 0; i < N; i++) {
       const inst = instances[i];
       // Recycle anything that has scrolled above the camera (with a small
-      // buffer so respawn isn't visible at the screen edge).
-      if (inst.y > camY + 4) {
+      // buffer so respawn isn't visible at the screen edge). Suppressed
+      // during the outro so the dust band drains instead of replenishing.
+      if (recycling && inst.y > camY + 4) {
         const angle = Math.random() * Math.PI * 2;
         const radius = 0.8 + Math.random() * 3.2;
         inst.x = Math.cos(angle) * radius;
@@ -234,6 +252,11 @@ function makeDepthLabelTexture(text: string): CanvasTexture {
  * evals per frame; ~55 KB position-buffer upload / 60 Hz.
  */
 function DepthRings() {
+  // Subscribed so we can suppress new pulse events once the descent
+  // finishes. In-flight events still cull + decay normally, so each ring
+  // settles back to its perfect-circle rest state over its natural ~1 s
+  // tail rather than freezing mid-spike when the player reaches the end.
+  const phase = useSession((s) => s.phase);
   type RingSpec = {
     y: number;
     cx: number;
@@ -373,27 +396,31 @@ function DepthRings() {
       rt.events.length = writeIdx;
 
       // 2. Spawn fresh events. Loop because a long frame could have skipped
-      //    multiple spawn windows.
-      while (now >= rt.nextSpawnAt) {
-        const spawnAt = rt.nextSpawnAt;
-        // 88% outward spike, 12% inward dip — keeps the dominant shape
-        // "blipping outward" while occasional dips give variety.
-        const isOutward = Math.random() < 0.88;
-        const amplitude =
-          (isOutward ? 1 : -1) * (0.32 + Math.random() * 0.55);
-        const rise = 70 + Math.random() * 130; // 70-200 ms
-        const decay = 380 + Math.random() * 620; // 380-1000 ms
-        rt.events.push({
-          birth: spawnAt,
-          peak: spawnAt + rise,
-          end: spawnAt + rise + decay,
-          angle: Math.random() * Math.PI * 2 * spec.arc,
-          amplitude,
-          width: 0.04 + Math.random() * 0.04, // 2.3°-4.6°
-        });
-        const minGap = spec.accent ? 800 : 1500;
-        const maxGap = spec.accent ? 2500 : 4000;
-        rt.nextSpawnAt = spawnAt + minGap + Math.random() * (maxGap - minGap);
+      //    multiple spawn windows. Skipped entirely once we hit 'finished'
+      //    so no new pulses are added — existing ones still play out
+      //    above and decay to zero, leaving rings as perfect circles.
+      if (phase !== 'finished') {
+        while (now >= rt.nextSpawnAt) {
+          const spawnAt = rt.nextSpawnAt;
+          // 88% outward spike, 12% inward dip — keeps the dominant shape
+          // "blipping outward" while occasional dips give variety.
+          const isOutward = Math.random() < 0.88;
+          const amplitude =
+            (isOutward ? 1 : -1) * (0.32 + Math.random() * 0.55);
+          const rise = 70 + Math.random() * 130; // 70-200 ms
+          const decay = 380 + Math.random() * 620; // 380-1000 ms
+          rt.events.push({
+            birth: spawnAt,
+            peak: spawnAt + rise,
+            end: spawnAt + rise + decay,
+            angle: Math.random() * Math.PI * 2 * spec.arc,
+            amplitude,
+            width: 0.04 + Math.random() * 0.04, // 2.3°-4.6°
+          });
+          const minGap = spec.accent ? 800 : 1500;
+          const maxGap = spec.accent ? 2500 : 4000;
+          rt.nextSpawnAt = spawnAt + minGap + Math.random() * (maxGap - minGap);
+        }
       }
 
       // 3. Recompute vertex positions: base + sum-of-active-event displacements.
