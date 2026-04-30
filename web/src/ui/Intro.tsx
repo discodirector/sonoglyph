@@ -7,7 +7,7 @@ import { useSession } from '../state/useSession';
  * Shown until the player clicks Begin (and `agent_paired` has arrived).
  * Walks them through:
  *   1. Copy the printed `hermes mcp add … && hermes chat …` command
- *   2. Run it in WSL
+ *   2. Run it in their terminal
  *   3. Wait for the green "AGENT PAIRED" indicator
  *   4. Begin descent
  */
@@ -141,7 +141,7 @@ function PairingPanel({
       </div>
 
       <CommandBlock
-        label="① IN WSL — RUN, ANSWER PROMPTS WITH 'Y'"
+        label="① IN TERMINAL — RUN, ANSWER PROMPTS WITH 'Y'"
         body={command}
       />
       <CommandBlock
@@ -158,7 +158,7 @@ function PairingPanel({
           lineHeight: 1.7,
         }}
       >
-        KEEP THE WSL TERMINAL OPEN throughout the game.
+        KEEP THE TERMINAL OPEN throughout the game.
         <br />
         Once the AGENT PAIRED light is on, hit Begin and place your first layer.
       </div>
@@ -192,26 +192,16 @@ function PairingPanel({
           }}
         >
           <div>
-            <strong style={{ color: '#d8d4cf' }}>1.</strong> Register the MCP
-            server only:
+            <strong style={{ color: '#d8d4cf' }}>1.</strong> Update your
+            Hermes:
+          </div>
+          <CommandBlock body="hermes update" />
+          <div>
+            <strong style={{ color: '#d8d4cf' }}>2.</strong> In your Hermes
+            chat, paste the command below and ask why it doesn't work —
+            Hermes will find the problem and fix itself:
           </div>
           <CommandBlock body={addCommand} />
-          <div>
-            <strong style={{ color: '#d8d4cf' }}>2.</strong> Verify the
-            connection (should print OK + tool list):
-          </div>
-          <CommandBlock body="hermes mcp test sonoglyph" />
-          <div>
-            <strong style={{ color: '#d8d4cf' }}>3.</strong> Then run the
-            chat. If <code>--yolo</code> is missing, Hermes will silently
-            wait at the first tool-approval prompt in <code>-q</code> mode.
-          </div>
-          <div style={{ color: '#6a6660', fontSize: 10 }}>
-            If <code>mcp test</code> already shows AGENT PAIRED in the HUD,
-            but Hermes never makes a move during the game, your model is
-            probably refusing to call tools — try a stronger instruction or
-            switch model with <code>-m &lt;model&gt;</code>.
-          </div>
         </div>
       </details>
     </div>
