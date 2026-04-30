@@ -154,21 +154,34 @@ export function Hud() {
           ))}
         </div>
 
-        {/* Hint — only during player's first turn */}
-        {playerCanAct && turnCount === 0 && (
-          <div
-            style={{
-              marginTop: 10,
-              textAlign: 'center',
-              fontSize: 11,
-              letterSpacing: '0.2em',
-              color: '#6a6660',
-            }}
-          >
-            CLICK INTO THE DARK TO PLACE A LAYER · KEYS 1-9 SELECT PRESET
-          </div>
-        )}
       </div>
+
+      {/* Center-screen instruction shown until the player places their first
+          layer. Larger + softly pulsing so a fresh player can't miss it; sits
+          outside the mixBlendMode container so the gray reads as solid gray
+          on the void rather than getting inverted. */}
+      {playerCanAct && turnCount === 0 && (
+        <div
+          style={{
+            position: 'fixed',
+            left: '50%',
+            top: '50%',
+            transform: 'translate(-50%, -50%)',
+            pointerEvents: 'none',
+            textAlign: 'center',
+            color: '#6a6660',
+            fontSize: 16,
+            letterSpacing: '0.2em',
+            textTransform: 'uppercase',
+            maxWidth: 720,
+            lineHeight: 1.6,
+            padding: '0 24px',
+            animation: 'sg-hint-pulse 2.4s ease-in-out infinite',
+          }}
+        >
+          Select a preset and click into the dark to place a layer
+        </div>
+      )}
     </>
   );
 }

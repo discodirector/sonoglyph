@@ -72,3 +72,16 @@ a {
     opacity: 0;
   }
 }
+
+/* First-turn hint — gentle "breathing" pulse so the player notices the
+   centered instruction without it strobing. ~2.4s period matches the slow
+   pacing of the descent. */
+@keyframes sg-hint-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
