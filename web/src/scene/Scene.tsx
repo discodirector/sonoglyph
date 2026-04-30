@@ -626,17 +626,28 @@ export function Scene({
       <FogSetup />
       <DescentCamera />
 
-      <ambientLight intensity={0.22} />
-      <pointLight position={[0, 0, 0]} intensity={0.6} distance={24} decay={2} />
+      {/* Everything below is gated on `phase !== 'intro'`. During pairing
+          the player is reading dense instructions in the centre of the
+          screen — any background motion (rings, glyph drift, parallax
+          dust) competes for attention and degrades readability. The
+          Canvas's own clear colour (#050507, set on the <Canvas> style
+          prop) provides the pure black void during intro. Once we cut
+          to `playing`, the full visual stack mounts at once. */}
+      {phase !== 'intro' && (
+        <>
+          <ambientLight intensity={0.22} />
+          <pointLight position={[0, 0, 0]} intensity={0.6} distance={24} decay={2} />
 
-      <DepthMarkers />
-      <ParallaxDust />
-      <DepthRings />
-      <GlyphStream />
+          <DepthMarkers />
+          <ParallaxDust />
+          <DepthRings />
+          <GlyphStream />
 
-      {layers.map((l) => (
-        <LayerOrb key={l.id} layer={l} />
-      ))}
+          {layers.map((l) => (
+            <LayerOrb key={l.id} layer={l} />
+          ))}
+        </>
+      )}
 
       {phase === 'playing' && <PlacementPlane onPlace={onPlace} />}
 
