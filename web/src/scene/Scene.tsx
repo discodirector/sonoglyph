@@ -212,13 +212,16 @@ function makeDepthLabelTexture(text: string): CanvasTexture {
  * pops per second across the whole shaft — present enough to feel alive,
  * sparse enough to read as deliberate.
  *
- * Structure (unchanged from v2): rings spaced every 100 ud down to -1100,
- * accent every 2nd (labels at 200, 400, 600, 800, 1000), ~14% skipped,
- * ~30% partial arcs, slight per-ring tilt + radius + center variation,
- * dim color palette so rings emerge from the fog rather than stand out.
+ * Structure: rings spaced every 50 ud down to -1100 (22 slots, ~14%
+ * skipped → ~19 rings active), accent every 4th ring so labels still
+ * land on clean 200-multiples (200, 400, 600, 800, 1000). Centered on
+ * the camera's vertical path (x=0, z=0) with small jitter so the camera
+ * always flies through each ring's interior, never beside or behind.
+ * ~30% partial arcs, slight per-ring tilt + radius variation, dim
+ * palette so rings emerge from the fog rather than stand out.
  *
- * Cost: ~9 rings × 240 vertices × ~3 active events = ~7k Gaussian evals
- * per frame. Position-buffer upload ~26 KB/frame at 60 Hz.
+ * Cost: ~19 rings × 240 vertices × ~3 active events ≈ 14k Gaussian
+ * evals per frame; ~55 KB position-buffer upload / 60 Hz.
  */
 function DepthRings() {
   type RingSpec = {
@@ -256,21 +259,28 @@ function DepthRings() {
 
   const rings = useMemo<RingSpec[]>(() => {
     const out: RingSpec[] = [];
-    for (let i = 1; i <= 11; i++) {
+    // 22 slots × 50 ud = 1100 ud total. Accent every 4th ring → labels
+    // land on 200, 400, 600, 800, 1000.
+    for (let i = 1; i <= 22; i++) {
       if (Math.random() < 0.14) continue; // ~14% skipped
       const broken = Math.random() < 0.3;
-      const accent = i % 2 === 0;
+      const accent = i % 4 === 0;
       out.push({
-        y: -i * 100,
-        cx: (Math.random() - 0.5) * 3,
-        cz: -6 + (Math.random() - 0.5) * 2,
+        y: -i * 50,
+        // Camera path is the vertical line (x=0, z=0). Center each ring
+        // on that axis with only small ±0.5 jitter — the camera (always
+        // at x=0, z=0) is then guaranteed to fly through every ring's
+        // interior with comfortable margin, even at the smallest radius
+        // (5.5) and worst-case tilt.
+        cx: (Math.random() - 0.5) * 1.0,
+        cz: (Math.random() - 0.5) * 1.0,
         radius: 5.5 + Math.random() * 2.5,
         arc: broken ? 0.4 + Math.random() * 0.4 : 1.0,
         tiltX: (Math.random() - 0.5) * 0.2,
         tiltZ: (Math.random() - 0.5) * 0.2,
         arcRotY: Math.random() * Math.PI * 2,
         accent,
-        label: accent ? `${i * 100}` : null,
+        label: accent ? `${i * 50}` : null,
       });
     }
     return out;
