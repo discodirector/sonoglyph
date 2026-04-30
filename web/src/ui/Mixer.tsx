@@ -6,31 +6,27 @@ import { setLayerVolume } from '../audio/engine';
  * Mini-EQ — left side of the screen during play. Nine vertical faders, one
  * per layer type, each driving the matching per-type bus in the audio engine.
  *
+ * Visually deliberately quiet: two grays, no border, tight spacing — the EQ
+ * should be reachable but never compete with the orbs for attention. Colour
+ * info is already carried by the orbs themselves and by the bottom palette,
+ * so the mixer doesn't need to repeat it.
+ *
  * Why CSS `transform: rotate(-90deg)` instead of `writing-mode: vertical-lr`
  * or `appearance: slider-vertical`: the modern way still has gaps in older
  * Chromium and the legacy `slider-vertical` is non-standard and silently
- * collapses to a 16×100 *horizontal* slider in some builds (the slider
- * disappears off the screen). Rotating a normal horizontal range slider works
- * everywhere and ships a guaranteed 100×16 vertical fader.
+ * collapses to a 16×100 *horizontal* slider in some builds. Rotating a normal
+ * horizontal range slider works everywhere.
  *
  * State of truth: useSession.layerVolumes. The setter both updates the store
- * (so the slider stays in sync after re-renders) and pokes setLayerVolume on
- * the engine, which ramps the bus gain over 50ms to avoid clicks. Range 0..1.5
- * — slightly above unity so the player can boost a single layer above the
- * default mix without touching others.
+ * and pokes setLayerVolume on the engine, which ramps the bus gain over 50ms.
  */
 
-const colors: Record<LayerType, string> = {
-  drone: '#8aa1b3',
-  texture: '#aab0a8',
-  pulse: '#cc5d4d',
-  glitch: '#7be0d4',
-  breath: '#d4a098',
-  bell: '#e8c97a',
-  drip: '#7eb6d6',
-  swell: '#9f7eb8',
-  chord: '#d4c8a8',
-};
+// Two grays from the project palette. TRACK paints the slider accent (track
+// + thumb); LABEL is for the type abbreviation, the percent readout, and the
+// "MIX" header. Muted channels just dim via opacity — we don't introduce a
+// third colour for that state.
+const TRACK_GRAY = '#aab0a8';
+const LABEL_GRAY = '#6a6660';
 
 // 3-letter abbreviations so the column stays narrow. Full type name appears
 // in the slider's title attribute (native tooltip on hover).
@@ -69,10 +65,10 @@ export function Mixer() {
         zIndex: 20,
         pointerEvents: 'auto',
         color: '#d8d4cf',
-        padding: '12px 12px 10px',
+        padding: '10px 10px 8px',
         background: 'rgba(5,5,7,0.55)',
-        border: '1px solid rgba(255,255,255,0.08)',
-        borderRadius: 2,
+        // Border removed — the panel reads as a soft dark patch, not a
+        // framed box.
         backdropFilter: 'blur(2px)',
         WebkitBackdropFilter: 'blur(2px)',
       }}
@@ -81,14 +77,17 @@ export function Mixer() {
         style={{
           fontSize: 9,
           letterSpacing: '0.35em',
-          color: '#9a958c',
+          color: LABEL_GRAY,
           textAlign: 'center',
-          marginBottom: 10,
+          marginBottom: 8,
         }}
       >
         MIX
       </div>
-      <div style={{ display: 'flex', gap: 6 }}>
+      {/* gap: 3 (down from 6) — half the previous spacing without letting
+          the labels under each fader collide. Column width is 24, so neighbour
+          centres land 27px apart. */}
+      <div style={{ display: 'flex', gap: 3 }}>
         {LAYER_TYPES.map((t) => (
           <Channel
             key={t}
@@ -114,7 +113,6 @@ function Channel({
   value: number;
   onChange: (v: number) => void;
 }) {
-  const color = colors[type];
   const muted = value < 0.02;
   const pct = Math.round(value * 100);
   return (
@@ -123,8 +121,10 @@ function Channel({
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        gap: 6,
-        width: 28,
+        gap: 5,
+        width: 24,
+        opacity: muted ? 0.4 : 1,
+        transition: 'opacity 150ms ease',
       }}
     >
       {/* Wrapper reserves the rotated bounding box: fader is laid out as a
@@ -152,7 +152,7 @@ function Channel({
             height: FADER_THICKNESS,
             transform: 'translate(-50%, -50%) rotate(-90deg)',
             transformOrigin: 'center',
-            accentColor: muted ? '#3a3a3e' : color,
+            accentColor: TRACK_GRAY,
             cursor: 'pointer',
             background: 'transparent',
             margin: 0,
@@ -163,7 +163,7 @@ function Channel({
         style={{
           fontSize: 8,
           letterSpacing: '0.1em',
-          color: muted ? '#3a3a3e' : color,
+          color: LABEL_GRAY,
           fontWeight: 600,
         }}
       >
@@ -173,7 +173,7 @@ function Channel({
         style={{
           fontSize: 8,
           letterSpacing: '0.05em',
-          color: muted ? '#3a3a3e' : '#9a958c',
+          color: LABEL_GRAY,
           fontVariantNumeric: 'tabular-nums',
         }}
       >
