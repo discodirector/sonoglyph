@@ -214,11 +214,15 @@ function makeDepthLabelTexture(text: string): CanvasTexture {
  *
  * Structure: rings spaced every 50 ud down to -1100 (22 slots, ~14%
  * skipped → ~19 rings active), accent every 4th ring so labels still
- * land on clean 200-multiples (200, 400, 600, 800, 1000). Centered on
- * the camera's vertical path (x=0, z=0) with small jitter so the camera
- * always flies through each ring's interior, never beside or behind.
- * ~30% partial arcs, slight per-ring tilt + radius variation, dim
- * palette so rings emerge from the fog rather than stand out.
+ * land on clean 200-multiples (200, 400, 600, 800, 1000). Centers sit
+ * ~4.5 ud forward of the camera (cz ≈ -4.5, cx ≈ 0) — close enough
+ * that the camera (always at x=0, z=0) stays inside each ring's
+ * interior with comfortable margin (min radius 5.5 vs. max distance
+ * ~5.0), but far enough that the bulk of the ring sits in front of the
+ * camera in the FOV — the eye reads each pass as "we fell through that"
+ * rather than "that materialized around us". ~30% partial arcs, slight
+ * per-ring tilt + radius variation, dim palette so rings emerge from
+ * the fog rather than stand out.
  *
  * Cost: ~19 rings × 240 vertices × ~3 active events ≈ 14k Gaussian
  * evals per frame; ~55 KB position-buffer upload / 60 Hz.
@@ -267,13 +271,18 @@ function DepthRings() {
       const accent = i % 4 === 0;
       out.push({
         y: -i * 50,
-        // Camera path is the vertical line (x=0, z=0). Center each ring
-        // on that axis with only small ±0.5 jitter — the camera (always
-        // at x=0, z=0) is then guaranteed to fly through every ring's
-        // interior with comfortable margin, even at the smallest radius
-        // (5.5) and worst-case tilt.
-        cx: (Math.random() - 0.5) * 1.0,
-        cz: (Math.random() - 0.5) * 1.0,
+        // Ring center sits ~4.5 ud forward of the camera path. Math:
+        // distance from camera (0, y, 0) to (cx, ringY, cz) at the moment
+        // of crossing = √(cx² + cz²). With cz ∈ [-4.9, -4.1] and cx ∈
+        // [-0.75, 0.75], distance ∈ [4.1, 4.96]. Min ring radius is 5.5,
+        // so the camera is always inside the ring's circle with ≥0.54 ud
+        // margin (more than enough to absorb tilt error). Putting the
+        // ring forward instead of centered on the camera restores the
+        // "falling-through-a-hoop" feel — most of the ring's geometry
+        // ends up in the forward FOV cone rather than wrapping around
+        // the camera's flanks where it can't be seen.
+        cx: (Math.random() - 0.5) * 1.5,
+        cz: -4.5 + (Math.random() - 0.5) * 0.8,
         radius: 5.5 + Math.random() * 2.5,
         arc: broken ? 0.4 + Math.random() * 0.4 : 1.0,
         tiltX: (Math.random() - 0.5) * 0.2,
