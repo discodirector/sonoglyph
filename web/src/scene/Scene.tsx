@@ -11,6 +11,7 @@ import {
   LinearFilter,
   Object3D,
   SpriteMaterial,
+  TorusGeometry,
 } from 'three';
 import type { InstancedMesh, Mesh } from 'three';
 import { useEffect, useMemo, useRef } from 'react';
@@ -166,43 +167,252 @@ function ParallaxDust() {
 }
 
 /**
- * Faint horizontal rings every ~80 depth units, like contour lines on a
- * vertical map. As the camera flies through them they give a tactile,
- * measurable sense of descent — "another one passed" — without crowding the
- * visual field. Every 5th ring is slightly more visible to add a rhythm.
+ * Generate a "heart-monitor" style displacement profile for one ring —
+ * mostly flat baseline, with a handful of sharp narrow spikes and small
+ * inverse dips, like the QRS complex on an ECG trace.
  *
- * Static — placed once at mount, no per-frame work. Fog naturally clips
- * far rings; cheap MeshBasic, ~14 draw calls but each is trivial.
+ * Returns N samples of radial displacement (added to the ring's base radius
+ * during torus vertex displacement). Sampled with linear interpolation when
+ * applied, so vertex count and N don't have to match.
+ */
+function generatePulseProfile(N: number): number[] {
+  const out = new Array<number>(N).fill(0);
+
+  // Baseline micro-noise: barely perceptible wobble that breaks perfect
+  // smoothness even between spikes. ±0.02 ≈ 0.3% of ring radius.
+  for (let i = 0; i < N; i++) {
+    out[i] = (Math.random() - 0.5) * 0.04;
+  }
+
+  // 5-8 sharp spike complexes randomly placed around the ring. Each is a
+  // narrow Gaussian with optional adjacent inverse dip — mirrors the visual
+  // shape of an ECG R-wave with neighboring S-wave.
+  const numPulses = 5 + Math.floor(Math.random() * 4);
+  for (let p = 0; p < numPulses; p++) {
+    const center = Math.floor(Math.random() * N);
+    const peakHeight = 0.35 + Math.random() * 0.55; // outward spike
+    const width = 4 + Math.floor(Math.random() * 4); // half-width in samples
+
+    for (let j = -width * 2; j <= width * 2; j++) {
+      const idx = ((center + j) % N + N) % N;
+      const t = j / width;
+      // Tight Gaussian — sharp peak that decays in a few samples.
+      out[idx] += peakHeight * Math.exp(-t * t * 1.5);
+    }
+
+    // 70% chance of an adjacent inverse dip on one side.
+    if (Math.random() < 0.7) {
+      const sign = Math.random() < 0.5 ? -1 : 1;
+      const dipCenter =
+        ((center + sign * (width + 2 + Math.floor(Math.random() * 3))) % N +
+          N) %
+        N;
+      const dipDepth = 0.06 + Math.random() * 0.14;
+      for (let j = -3; j <= 3; j++) {
+        const idx = ((dipCenter + j) % N + N) % N;
+        const t = j / 3;
+        out[idx] -= dipDepth * Math.exp(-t * t * 2);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Apply a radial-displacement profile to a TorusGeometry's vertices in-place.
+ * Torus is constructed in the XY plane (ring around Z axis); we displace each
+ * vertex radially outward from origin by an amount sampled from the profile
+ * at the vertex's angle around the ring. Tube cross-section gets multiplied
+ * along with the rest, but at our tube radius (0.03) that shape change is
+ * imperceptible.
+ */
+function applyPulseToTorus(geo: TorusGeometry, profile: number[]): void {
+  const pos = geo.attributes.position;
+  const N = profile.length;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const y = pos.getY(i);
+    const angle = Math.atan2(y, x); // -π..π
+    const t = (angle + Math.PI) / (Math.PI * 2); // 0..1
+    const idxF = t * N;
+    const i0 = Math.floor(idxF) % N;
+    const i1 = (i0 + 1) % N;
+    const frac = idxF - Math.floor(idxF);
+    const disp = profile[i0] * (1 - frac) + profile[i1] * frac;
+
+    const r = Math.sqrt(x * x + y * y);
+    if (r > 1e-6) {
+      const factor = (r + disp) / r;
+      pos.setX(i, x * factor);
+      pos.setY(i, y * factor);
+    }
+  }
+  pos.needsUpdate = true;
+  geo.computeBoundingSphere();
+}
+
+/**
+ * Render depth-label text ("200", "400", ...) into a CanvasTexture. Wider
+ * than tall to fit 3-4 digits in IBM Plex Mono.
+ */
+function makeDepthLabelTexture(text: string): CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 80;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, 256, 80);
+  ctx.fillStyle = '#a8a8a0';
+  ctx.font = '500 56px "IBM Plex Mono", "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 128, 44);
+  const tex = new CanvasTexture(canvas);
+  tex.minFilter = LinearFilter;
+  tex.magFilter = LinearFilter;
+  return tex;
+}
+
+/**
+ * Faint horizontal rings every 100 depth units down through the corridor —
+ * the player's only "ruler" against the void. Big change from the v1 grid:
+ *
+ * - Each ring's vertices are displaced by a per-ring pulse profile so the
+ *   silhouette wiggles like an ECG trace (mostly flat with sharp narrow
+ *   spikes). Generated once at mount and baked into the BufferGeometry.
+ *
+ * - ~30% of rings are broken arcs (40–80% of a full circle) at random
+ *   start angles, ~14% are skipped entirely. Radii vary 5.5–8.0; centers
+ *   are slightly off-axis (±1.5 x, ±1 z); each ring carries a small
+ *   ±~6° tilt around X and Z so they don't all lie on the same horizontal
+ *   plane.
+ *
+ * - Every 2nd ring is an "accent" — slightly more visible plus a depth
+ *   label sprite ("200", "400", ...) pinned just outside its right side,
+ *   so the player has a literal sense of how deep they've gone.
+ *
+ * - Brightness halved overall vs. v1: base #4a463f / opacity 0.10 (was
+ *   0.18), accent #7a8a98 / opacity 0.18 (was 0.32). Rings now "emerge
+ *   from the fog" rather than stand out in front of it.
+ *
+ * Cost: ~9-10 mesh draw calls (after misses) + ~5 sprites. Each torus has
+ * 240×4 = 960 vertices — total geometry well under 10k vertices for the
+ * whole layer.
  */
 function DepthRings() {
-  const rings = useMemo(() => {
-    const out: Array<{ y: number; accent: boolean }> = [];
-    // Start at i=1 so the first ring is below the starting camera position.
-    for (let i = 1; i <= 14; i++) {
-      out.push({ y: -i * 80, accent: i % 5 === 0 });
+  type RingSpec = {
+    y: number;
+    cx: number;
+    cz: number;
+    radius: number;
+    arc: number; // 1.0 for full ring; 0.4-0.8 when broken
+    tiltX: number;
+    tiltZ: number;
+    arcRotY: number; // world Y rotation that decides where a broken arc starts
+    accent: boolean;
+    label: string | null;
+    profile: number[];
+  };
+
+  const rings = useMemo<RingSpec[]>(() => {
+    const out: RingSpec[] = [];
+    for (let i = 1; i <= 11; i++) {
+      // ~14% of rings skipped entirely — uneven gaps make the structure
+      // feel discovered rather than placed.
+      if (Math.random() < 0.14) continue;
+      const broken = Math.random() < 0.3;
+      const accent = i % 2 === 0; // every 200 ud → 5 accents
+      const y = -i * 100;
+      out.push({
+        y,
+        cx: (Math.random() - 0.5) * 3,
+        cz: -6 + (Math.random() - 0.5) * 2,
+        radius: 5.5 + Math.random() * 2.5,
+        arc: broken ? 0.4 + Math.random() * 0.4 : 1.0,
+        tiltX: (Math.random() - 0.5) * 0.2, // ±~5.7°
+        tiltZ: (Math.random() - 0.5) * 0.2,
+        arcRotY: Math.random() * Math.PI * 2,
+        accent,
+        label: accent ? `${i * 100}` : null,
+        profile: generatePulseProfile(240),
+      });
     }
     return out;
   }, []);
 
+  // Build one TorusGeometry per ring with the pulse profile baked in. Done
+  // in a single useMemo so we control disposal explicitly.
+  const geometries = useMemo<TorusGeometry[]>(() => {
+    return rings.map((r) => {
+      // tubularSegments=240 gives ~1.5° resolution — fine enough that the
+      // pulse spikes look sharp. radialSegments=4 because the tube is so
+      // thin (0.03) that cross-section detail is invisible.
+      const geo = new TorusGeometry(
+        r.radius,
+        0.03,
+        4,
+        240,
+        Math.PI * 2 * r.arc,
+      );
+      applyPulseToTorus(geo, r.profile);
+      return geo;
+    });
+  }, [rings]);
+
+  // Cache CanvasTextures for the labels (one per unique label string).
+  const labelTextures = useMemo(() => {
+    const map = new Map<string, CanvasTexture>();
+    for (const r of rings) {
+      if (r.label && !map.has(r.label)) {
+        map.set(r.label, makeDepthLabelTexture(r.label));
+      }
+    }
+    return map;
+  }, [rings]);
+
+  // Dispose GPU resources on unmount.
+  useEffect(() => {
+    return () => {
+      geometries.forEach((g) => g.dispose());
+      labelTextures.forEach((t) => t.dispose());
+    };
+  }, [geometries, labelTextures]);
+
   return (
     <group>
-      {rings.map((r) => (
-        <mesh
-          key={r.y}
-          position={[0, r.y, -6]}
-          rotation={[Math.PI / 2, 0, 0]}
-        >
-          {/* args: ringRadius, tubeRadius, radialSegments, tubularSegments.
-              Tube radius 0.03 keeps the ring as a thin filament; 4 radial
-              segments are enough since the tube's own thickness is invisibly
-              small at viewing distance. */}
-          <torusGeometry args={[6.5, 0.03, 4, 72]} />
-          <meshBasicMaterial
-            color={r.accent ? '#8aa1b3' : '#6a6660'}
-            transparent
-            opacity={r.accent ? 0.32 : 0.18}
-          />
-        </mesh>
+      {rings.map((r, i) => (
+        <group key={r.y} position={[r.cx, r.y, r.cz]}>
+          {/* Inner group composes: rotate around world Y to set arc start
+              position, then add small X/Z tilts. The leaf mesh's
+              [PI/2, 0, 0] rotation flips the torus from XY plane to
+              horizontal. */}
+          <group rotation={[r.tiltX, r.arcRotY, r.tiltZ]}>
+            <mesh rotation={[Math.PI / 2, 0, 0]} geometry={geometries[i]}>
+              <meshBasicMaterial
+                color={r.accent ? '#7a8a98' : '#4a463f'}
+                transparent
+                opacity={r.accent ? 0.18 : 0.1}
+                depthWrite={false}
+              />
+            </mesh>
+          </group>
+          {/* Depth label — sits just past the ring's right side at its own
+              y level. Sprites always face the camera so it's readable from
+              any descent angle. Position is in the un-tilted outer group so
+              labels stay on a clean vertical column. */}
+          {r.label && labelTextures.get(r.label) && (
+            <sprite
+              position={[r.radius + 1.4, 0, 0]}
+              scale={[1.6, 0.5, 1]}
+            >
+              <spriteMaterial
+                map={labelTextures.get(r.label)}
+                transparent
+                opacity={0.35}
+                depthWrite={false}
+              />
+            </sprite>
+          )}
+        </group>
       ))}
     </group>
   );
