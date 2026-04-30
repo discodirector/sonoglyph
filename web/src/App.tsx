@@ -38,7 +38,6 @@ export function App() {
   const setRecording = useSession((s) => s.setRecording);
   const setRecordingBlob = useSession((s) => s.setRecordingBlob);
   const recordingBlob = useSession((s) => s.recordingBlob);
-  const audioPinStatus = useSession((s) => s.audioPinStatus);
   const setAudioPinPending = useSession((s) => s.setAudioPinPending);
   const setAudioPinSuccess = useSession((s) => s.setAudioPinSuccess);
   const setAudioPinError = useSession((s) => s.setAudioPinError);
@@ -58,6 +57,14 @@ export function App() {
   // applySnapshot that re-asserts the already-final layer count, or HMR
   // in dev). Once we've armed the outro, that's it.
   const outroTriggeredRef = useRef(false);
+  // Same idea for the IPFS pin: once we've started uploading the blob,
+  // never start again. Earlier I gated on `audioPinStatus !== 'idle'`
+  // with audioPinStatus in deps — that combo bit us. The transition
+  // idle→pending re-runs the effect, the cleanup function flips the
+  // closure-local `cancelled = true` flag, and when the in-flight pin
+  // call eventually resolves we drop its result on the floor.
+  // Refs survive deps changes, so they don't cancel themselves.
+  const pinTriggeredRef = useRef(false);
 
   // Health check (proxy reachability indicator).
   useEffect(() => {
@@ -141,37 +148,32 @@ export function App() {
   // bridge to Pinata. Status is mirrored into the store so the Finale UI
   // (and later the mint button) can see "pending" → "pinned" → "error".
   //
-  // Idempotency: gated on `audioPinStatus === 'idle'`. Once the call is in
-  // flight or has succeeded, we never re-fire — the network round trip is
-  // expensive enough (5 MB upload) that retries should be explicit, not a
-  // side effect of a re-render.
+  // Idempotency: pinTriggeredRef. The previous version used the store's
+  // audioPinStatus as both guard and dep, which meant the idle→pending
+  // transition re-ran the effect, the cleanup fired `cancelled = true`,
+  // and when the in-flight pin call resolved we dropped the CID. The ref
+  // survives dep changes, so the cleanup-on-rerun problem doesn't apply.
   // ---------------------------------------------------------------------------
   useEffect(() => {
+    if (pinTriggeredRef.current) return;
     if (!recordingBlob) return;
-    if (audioPinStatus !== 'idle') return;
+    pinTriggeredRef.current = true;
     setAudioPinPending();
-    let cancelled = false;
     (async () => {
       try {
         const result = await pinAudio(recordingBlob, pairingCode ?? undefined);
-        if (cancelled) return;
         console.log(
           `[ipfs] pinned ${(recordingBlob.size / 1024).toFixed(1)} KiB → ${result.cid}`,
         );
         setAudioPinSuccess(result.cid);
       } catch (err) {
-        if (cancelled) return;
         const message = err instanceof Error ? err.message : String(err);
         console.error('[ipfs] pin failed:', message);
         setAudioPinError(message);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
   }, [
     recordingBlob,
-    audioPinStatus,
     pairingCode,
     setAudioPinPending,
     setAudioPinSuccess,
