@@ -59,6 +59,24 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
       >
         SONOGLYPH
       </h1>
+      {/* Slogan / value-prop tagline. Three-beat rhythm matching the
+          three external partners — composition agent (Hermes), final
+          artifact generator (Kimi), settlement chain (Monad). Uses
+          the same #c9885b accent as the instruction labels below so
+          it visually anchors to the rest of the page rather than
+          floating between the title and the italic flavor text. */}
+      <p
+        style={{
+          margin: 0,
+          maxWidth: 540,
+          fontSize: 13,
+          letterSpacing: '0.08em',
+          color: '#c9885b',
+          lineHeight: 1.5,
+        }}
+      >
+        Compose with Hermes, create with Kimi, own on Monad.
+      </p>
       <p
         style={{
           maxWidth: 520,
@@ -80,7 +98,6 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
         <PairingPanel
           command={pairing.hermesCommand}
           prompt={pairing.hermesPrompt}
-          code={pairing.code}
         />
       )}
 
@@ -124,11 +141,9 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
 function PairingPanel({
   command,
   prompt,
-  code,
 }: {
   command: string;
   prompt: string;
-  code: string;
 }) {
   return (
     <div
@@ -141,17 +156,13 @@ function PairingPanel({
         width: '100%',
       }}
     >
-      {/* Descent code — single inline line, low-emphasis. The orange
-          accent that used to live here moved onto the four
-          instructional labels below (① / ② / KEEP… / TROUBLESHOOT)
-          where it actually guides the eye through the steps. The
-          code itself is just a reference value the player only needs
-          to copy, so it sits in the same muted style as the section
-          labels. */}
-      <div style={{ fontSize: 11, letterSpacing: '0.25em', color: '#6a6660' }}>
-        DESCENT CODE {code}
-      </div>
-
+      {/* Descent code is no longer surfaced to the player: it's
+          already embedded in both the `hermes mcp add` command (as
+          a query parameter on the MCP URL) and in the chat prompt,
+          so the only thing the player would do with a visible code
+          is double-check what they already pasted. Removing it
+          declutters the panel and shifts the eye straight to the
+          two-step instructions. */}
       <CommandBlock
         label="① IN TERMINAL — RUN, ANSWER PROMPTS WITH 'Y'"
         labelColor="#c9885b"
