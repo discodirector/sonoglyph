@@ -8,11 +8,17 @@ ERC-721 of completed Sonoglyph descents. Fully on-chain rendering of glyph
 
 | Network        | Chain ID | Address |
 |----------------|----------|---------|
-| Monad testnet  | 10143    | [`0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931`](https://testnet.monadexplorer.com/address/0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931) |
+| **Monad mainnet** _(production)_ | 143    | [`0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931`](https://monadexplorer.com/address/0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931) |
+| Monad testnet _(development)_   | 10143  | [`0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931`](https://testnet.monadexplorer.com/address/0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931) |
+
+The address is identical on both networks — same deployer, same nonce 0,
+so `CREATE` lands on the same `keccak(rlp(sender, nonce))[12:]`.
 
 Owner / sole minter: `0x331d5F69d188b1A37B0b1D6dd058f76b52e4457b` — the
 bridge wallet, used by `proxy/` to sign mint transactions on the player's
-behalf. First mint (smoke test) lives at tokenId `1`.
+behalf. The bridge's active network is selected by `MONAD_CHAIN_ID` in
+`.env` (currently `143` → mainnet). Switch to `10143` to point the same
+bridge at testnet without redeploying anything.
 
 ## Layout
 
