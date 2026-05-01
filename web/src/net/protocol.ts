@@ -43,6 +43,14 @@ export interface PlacedLayer {
 export type GamePhase = 'lobby' | 'playing' | 'finished';
 export type CurrentTurn = 'player' | 'agent';
 
+/** Wire-format view of the descent's musical key. */
+export interface SessionScalePublic {
+  rootPc: number;     // 0..11
+  rootName: string;   // 'F#'
+  modeName: string;   // 'Phrygian'
+  feel: string;
+}
+
 export interface GameStateSnapshot {
   phase: GamePhase;
   layers: PlacedLayer[];
@@ -51,6 +59,7 @@ export interface GameStateSnapshot {
   currentTurn: CurrentTurn | null;
   cooldownEndsAt: number | null;
   agentConnected: boolean;
+  scale: SessionScalePublic;
 }
 
 export interface FinalArtifact {
@@ -62,10 +71,11 @@ export interface FinalArtifact {
 export type ClientMessage =
   | { type: 'hello' }
   | {
+      // freq is decided server-side from the descent's scale — see theory.ts
+      // on the bridge. The chosen pitch comes back via `layer_added`.
       type: 'place_layer';
       layerType: LayerType;
       position: [number, number, number];
-      freq: number;
     };
 
 export type ServerMessage =

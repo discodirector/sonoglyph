@@ -41,6 +41,12 @@ import { z } from 'zod';
 import { GameSession } from './game.js';
 import { GameRegistry } from './registry.js';
 import { LAYER_TYPES, type LayerType } from './protocol.js';
+import {
+  describeScale,
+  INTENT_DESCRIPTIONS,
+  INTENT_VALUES,
+  type Intent,
+} from './theory.js';
 
 // One MCP server + transport per game session. Built lazily on first MCP
 // hit for a given code (Hermes reaches us before or after the browser does
@@ -55,6 +61,7 @@ interface McpEntry {
 const mcpBySession = new Map<string, McpEntry>();
 
 const layerTypeSchema = z.enum(LAYER_TYPES as [LayerType, ...LayerType[]]);
+const intentSchema = z.enum(INTENT_VALUES as [Intent, ...Intent[]]);
 
 /**
  * Build (or reuse) the MCP server for a given session, then route the
@@ -123,21 +130,47 @@ export function disposeMcpForSession(code: string): void {
 }
 
 function createMcpForSession(code: string, game: GameSession): McpEntry {
+  const scale = game.getScale();
+  const intentLines = (Object.keys(INTENT_DESCRIPTIONS) as Intent[])
+    .map((k) => `    - ${k}: ${INTENT_DESCRIPTIONS[k]}`)
+    .join('\n');
+
+  // The instructions string is read by Hermes once at handshake. We put the
+  // descent-specific musical context here so Kimi can reason about pitch
+  // and mood across turns instead of just picking layer types in isolation.
+  const instructions = [
+    `You are co-composing Sonoglyph — a turn-based ambient/noise music descent — with a human.`,
+    ``,
+    `This descent unfolds in **${describeScale(scale)}**.`,
+    `All layers (yours and the player's) are pitched within this scale, so think of yourself as choosing where in that key to land.`,
+    ``,
+    `Loop: call wait_for_my_turn, then place_layer(type, comment, intent?). Stop when the game finishes.`,
+    ``,
+    `Layer types — pick the one that fits the moment:`,
+    `  drone   — low sustained foundation`,
+    `  texture — airy filtered noise, no clear pitch`,
+    `  pulse   — slow rhythmic tone`,
+    `  glitch  — brief noisy disturbance`,
+    `  breath  — vocal exhalation`,
+    `  bell    — resonant struck tone with long decay`,
+    `  drip    — sparse single tonal pings`,
+    `  swell   — slow filtered wave that approaches and recedes`,
+    `  chord   — harmonic pad (root + fifth + octave)`,
+    ``,
+    `Intent (optional, biases the pitch within the descent's key):`,
+    intentLines,
+    ``,
+    `Comment is ONE short evocative line (<80 chars) reacting to the music so far.`,
+    `Vary your type AND intent across the descent — a sequence like`,
+    `(drone hush) → (drone color) → (bell tension) → (chord release) builds shape;`,
+    `repeating the same type with the same intent flattens the composition.`,
+  ].join('\n');
+
   const server = new McpServer(
     { name: 'sonoglyph', version: '0.1.0' },
     {
       capabilities: { tools: {} },
-      instructions:
-        'You are co-composing Sonoglyph — a turn-based ambient/noise music ' +
-        'descent — with a human. Loop: call wait_for_my_turn, then ' +
-        'place_layer(type, comment). Comment is ONE short evocative line ' +
-        '(<80 chars) reacting to the music so far. Stop when the game ' +
-        'finishes. Available types: drone (low foundation), texture (airy ' +
-        'noise), pulse (rhythm), glitch (brief disturbance), breath (vocal ' +
-        'exhalation), bell (resonant struck tone with long decay), drip ' +
-        '(sparse single tonal pings), swell (slow filtered wave), chord ' +
-        '(harmonic pad — root + fifth + octave). Vary your choices; the ' +
-        'composition gets richer when you don\'t repeat the same type.',
+      instructions,
     },
   );
 
@@ -204,10 +237,11 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
     'place_layer',
     {
       description:
-        'Place a sound layer of the given type. The bridge picks a 3D ' +
-        'position automatically (deeper than the previous layer, in a ' +
-        'narrow cone). Provide a short evocative comment (<80 chars) — ' +
-        "it's shown to the player as your reaction.",
+        'Place a sound layer of the given type. The bridge picks the 3D ' +
+        'position and the pitch — pitch is snapped to the descent\'s key ' +
+        '(see initial instructions for the scale), and your `intent` ' +
+        'biases which scale degree gets chosen. Provide a short evocative ' +
+        'comment (<80 chars) — it\'s shown to the player as your reaction.',
       inputSchema: {
         type: layerTypeSchema.describe(
           'drone | texture | pulse | glitch | breath | bell | drip | swell | chord',
@@ -217,11 +251,25 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
           .min(1)
           .max(200)
           .describe('Short evocative line shown to the player.'),
+        intent: intentSchema
+          .optional()
+          .describe(
+            'Compositional intent — biases the pitch toward dissonant ' +
+              'or consonant degrees of the descent\'s scale. ' +
+              'tension=♭2/tritone/leading-tone, release=root/fifth, ' +
+              'color=♭6/6th/9th, emphasis=third, hush=low root. ' +
+              'Omit to let the bridge pick a comfortable pitch.',
+          ),
       },
     },
-    async ({ type, comment }) => {
-      console.log(`[mcp ${code}] tool: place_layer type=${type} "${comment.slice(0, 60)}"`);
-      const result = game.agentPlace(type, comment);
+    async ({ type, comment, intent }) => {
+      console.log(
+        `[mcp ${code}] tool: place_layer type=${type} intent=${intent ?? '-'} "${comment.slice(
+          0,
+          60,
+        )}"`,
+      );
+      const result = game.agentPlace(type, comment, intent);
       if (!result.ok) {
         console.log(`[mcp ${code}]   → REJECTED: ${result.error}`);
         return {
@@ -232,7 +280,11 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
         };
       }
       const layer = result.layer!;
-      console.log(`[mcp ${code}]   → placed @ [${layer.position.map((n) => n.toFixed(1)).join(',')}]`);
+      console.log(
+        `[mcp ${code}]   → placed @ [${layer.position
+          .map((n) => n.toFixed(1))
+          .join(',')}] freq=${layer.freq.toFixed(2)}Hz`,
+      );
       return {
         content: [
           {
@@ -243,6 +295,8 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
                 placed: {
                   type: layer.type,
                   position: layer.position,
+                  freq_hz: Number(layer.freq.toFixed(2)),
+                  intent: intent ?? null,
                   comment: layer.comment,
                 },
                 turn: game.snapshot().turnCount,
@@ -306,6 +360,12 @@ function createMcpForSession(code: string, game: GameSession): McpEntry {
 /**
  * Compact state shape for the agent. Hermes doesn't need internal IDs
  * or born timestamps — only what's musically meaningful.
+ *
+ * Each placed layer reports its pitch (`freq_hz`), so the agent can read
+ * the trajectory of the composition and decide e.g. "we've hit the root
+ * three times in a row, time for a tension move". Scale info is included
+ * so the agent can reason about pitch choices in key terms even if it
+ * forgot the initial instructions.
  */
 function serializeStateForAgent(
   s: ReturnType<GameSession['snapshot']>,
@@ -319,10 +379,15 @@ function serializeStateForAgent(
     cooldown_remaining_ms: s.cooldownEndsAt
       ? Math.max(0, s.cooldownEndsAt - Date.now())
       : 0,
+    scale: {
+      key: `${s.scale.rootName} ${s.scale.modeName}`,
+      feel: s.scale.feel,
+    },
     layers_placed: s.layers.map((l) => ({
       type: l.type,
       placed_by: l.placedBy,
       position: l.position.map((n) => Number(n.toFixed(2))),
+      freq_hz: Number(l.freq.toFixed(2)),
       comment: l.comment,
     })),
   };

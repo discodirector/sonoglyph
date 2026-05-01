@@ -28,27 +28,14 @@ import {
   type LayerType,
   type PlacedLayer,
   type ServerMessage,
+  type SessionScalePublic,
 } from './protocol.js';
-
-const FREQS_BY_TYPE: Record<LayerType, number[]> = {
-  drone: [55, 61.74, 65.41, 73.42, 82.41, 87.31],
-  texture: [800],
-  pulse: [110, 130.81, 146.83, 164.81, 196],
-  glitch: [1500],
-  breath: [730],
-  // Day 6 expansion — four new presets that fill gaps in the palette:
-  // resonance (bell), single events (drip), waves (swell), harmony (chord).
-  // Bell: A4–A5 natural pitches so successive bells form a recognizable
-  // pentatonic-ish set instead of arbitrary intervals.
-  bell: [440, 523.25, 587.33, 659.25, 783.99, 880],
-  // Drip: high tonal pings — the freq drives the pitch of the percussive tail.
-  drip: [800, 1000, 1200],
-  // Swell: filter centre frequency for a noise-bed wave; values picked to sit
-  // in the mid spectrum so swells feel "approaching" rather than melodic.
-  swell: [600, 700, 820],
-  // Chord: root note. Engine builds 5th + octave on top automatically.
-  chord: [110, 130.81, 146.83, 164.81, 196],
-};
+import {
+  pickFreqForLayer,
+  pickSessionScale,
+  type Intent,
+  type SessionScale,
+} from './theory.js';
 
 type Listener = (msg: ServerMessage) => void;
 
@@ -77,6 +64,10 @@ export class GameSession {
   private agentConnected = false;
   private phase: 'lobby' | 'playing' | 'finished' = 'lobby';
   private finalArtifact: FinalArtifact | null = null;
+  // Picked once at construction; immutable for the lifetime of the descent.
+  // Both player clicks and agent place_layer calls go through this scale
+  // when choosing pitches, so every layer in the session shares a key.
+  private readonly scale: SessionScale = pickSessionScale();
   // Wall-clock when the descent started; used to project the current camera
   // depth on the bridge so agent-placed layers land in the player's view.
   private gameStartedAt: number | null = null;
@@ -120,6 +111,22 @@ export class GameSession {
       currentTurn: this.currentTurn,
       cooldownEndsAt: this.cooldownEndsAt,
       agentConnected: this.agentConnected,
+      scale: this.scalePublic(),
+    };
+  }
+
+  /** Full scale info for in-process callers (mcp.ts uses this for prompts). */
+  getScale(): SessionScale {
+    return this.scale;
+  }
+
+  /** Public-shape scale for wire payloads. */
+  scalePublic(): SessionScalePublic {
+    return {
+      rootPc: this.scale.rootPc,
+      rootName: this.scale.rootName,
+      modeName: this.scale.modeName,
+      feel: this.scale.feel,
     };
   }
 
@@ -170,17 +177,25 @@ export class GameSession {
     return { ok: true };
   }
 
-  /** Player attempts to place a layer. */
+  /**
+   * Player attempts to place a layer. The player has no `intent` parameter
+   * — every click goes through the no-intent branch of the freq picker
+   * (consonant-weighted random degree within the descent's scale). That
+   * keeps the click-to-sound feedback loop tight while still landing every
+   * pitch in the session's key.
+   */
   playerPlace(
     layerType: LayerType,
     position: [number, number, number],
-    freq: number,
   ): { ok: boolean; error?: string } {
     if (this.phase !== 'playing') return fail('not playing');
     if (this.currentTurn !== 'player') return fail('not your turn');
     if (this.cooldownEndsAt && Date.now() < this.cooldownEndsAt)
       return fail('cooldown');
     if (this.layers.length >= MAX_LAYERS) return fail('max layers reached');
+    if (!LAYER_TYPES.includes(layerType)) return fail(`unknown type: ${layerType}`);
+
+    const freq = pickFreqForLayer(this.scale, layerType, undefined);
 
     this.appendLayer({ type: layerType, position, freq, placedBy: 'player' });
     this.afterPlace('player');
@@ -189,11 +204,20 @@ export class GameSession {
 
   /**
    * Agent (Hermes via MCP) attempts to place a layer.
+   *
    * Position is computed by the server — Hermes only picks type + comment.
+   *
+   * `intent` is the agent's compositional intent for this placement
+   * (`tension`, `release`, `color`, `emphasis`, `hush`). It biases the
+   * pitch within the descent's scale: e.g. `tension` favors the ♭2 / tritone
+   * / leading tone, `release` settles on root or fifth. Optional — if the
+   * agent omits it we fall back to the same consonant-weighted random
+   * choice the player gets.
    */
   agentPlace(
     layerType: LayerType,
     comment: string,
+    intent?: Intent,
   ): {
     ok: boolean;
     error?: string;
@@ -207,8 +231,7 @@ export class GameSession {
     if (!LAYER_TYPES.includes(layerType)) return fail(`unknown type: ${layerType}`);
 
     const position = pickAgentPosition(this.gameStartedAt ?? Date.now());
-    const freqs = FREQS_BY_TYPE[layerType];
-    const freq = freqs[Math.floor(Math.random() * freqs.length)];
+    const freq = pickFreqForLayer(this.scale, layerType, intent);
 
     const layer = this.appendLayer({
       type: layerType,

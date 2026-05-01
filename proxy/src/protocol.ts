@@ -74,6 +74,21 @@ export interface PlacedLayer {
 export type GamePhase = 'lobby' | 'playing' | 'finished';
 export type CurrentTurn = 'player' | 'agent';
 
+/**
+ * Wire-format view of the descent's musical key. The full {@link SessionScale}
+ * type lives in `theory.ts` and carries the interval table + ScaleMode enum
+ * — those are bridge internals. Clients only see the display strings + the
+ * pitch class so they can do their own UI math if needed.
+ */
+export interface SessionScalePublic {
+  /** Pitch class 0..11 (0=C). Useful if a client wants to do its own math. */
+  rootPc: number;
+  rootName: string;   // 'F#'
+  modeName: string;   // 'Phrygian'
+  /** One-line "feel" — same string used in the agent's instructions. */
+  feel: string;
+}
+
 export interface GameStateSnapshot {
   phase: GamePhase;
   layers: PlacedLayer[];
@@ -82,6 +97,8 @@ export interface GameStateSnapshot {
   currentTurn: CurrentTurn | null;
   cooldownEndsAt: number | null;
   agentConnected: boolean;
+  /** The descent's musical key. Picked at session creation, never changes. */
+  scale: SessionScalePublic;
 }
 
 /**
@@ -98,13 +115,17 @@ export interface FinalArtifact {
 // ---------------------------------------------------------------------------
 // Client → Server (browser side)
 // ---------------------------------------------------------------------------
+//
+// `place_layer` no longer carries `freq`: the bridge picks the frequency
+// from the descent's scale (see theory.ts) so player + agent placements
+// stay in the same key. The chosen freq comes back to the client via the
+// `layer_added` echo, so the audio engine plays the agreed pitch.
 export type ClientMessage =
   | { type: 'hello' }
   | {
       type: 'place_layer';
       layerType: LayerType;
       position: [number, number, number];
-      freq: number;
     };
 
 // ---------------------------------------------------------------------------

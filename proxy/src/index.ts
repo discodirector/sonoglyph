@@ -322,16 +322,18 @@ wss.on('connection', (ws: WSConn) => {
   // pairing mid-game.
   const hermesPrompt =
     "You are Hermes, co-composing Sonoglyph with me via the sonoglyph MCP server. " +
+    "Read the server's initial instructions for the descent's musical key (root + mode). " +
     "Loop autonomously now: " +
     "(1) call wait_for_my_turn (it blocks ~10s for the cooldown). " +
-    "(2) when it returns it_is_my_turn=true, immediately call place_layer(type, comment). " +
+    "(2) when it returns it_is_my_turn=true, immediately call place_layer(type, comment, intent). " +
     "(3) repeat from step 1. " +
     "Stop only when wait_for_my_turn returns finished=true. " +
     "Do not emit text between tool calls. " +
-    "Layer types: drone (low foundation), texture (airy noise), pulse (rhythm), " +
-    "glitch (brief disturbance), breath (vocal exhalation), bell (resonant " +
-    "struck tone with long decay), drip (sparse single pings), swell (slow " +
-    "filtered wave), chord (harmonic pad). Vary your choices across the descent. " +
+    "Layer types: drone, texture, pulse, glitch, breath, bell, drip, swell, chord. " +
+    "Intent (optional but encouraged): tension | release | color | emphasis | hush — " +
+    "this biases the pitch within the descent's scale. " +
+    "Vary BOTH type and intent across the descent so the composition has a shape " +
+    "(e.g. hush → color → tension → release). " +
     "Comment is one evocative line under 80 chars reacting to the music so far.";
   const hermesAddCommand = `hermes mcp add sonoglyph --url '${mcpUrl}'`;
   // One-liner: register MCP, then open INTERACTIVE chat. Player pastes the
@@ -367,7 +369,11 @@ wss.on('connection', (ws: WSConn) => {
         return;
       }
       case 'place_layer': {
-        const result = game.playerPlace(msg.layerType, msg.position, msg.freq);
+        // Pitch is no longer client-supplied — the bridge picks it from
+        // the descent's scale (see GameSession.playerPlace → theory.ts).
+        // The chosen freq comes back to the client via the `layer_added`
+        // echo, so the audio engine plays the agreed pitch.
+        const result = game.playerPlace(msg.layerType, msg.position);
         if (!result.ok) {
           send({ type: 'error', message: result.error ?? 'place rejected' });
         }

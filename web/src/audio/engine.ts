@@ -293,60 +293,46 @@ interface PresetBuild {
   dispose: () => void;
 }
 
-const FREQS_LOW = [55, 61.74, 65.41, 73.42, 82.41, 87.31];
-const FREQS_MID = [110, 130.81, 146.83, 164.81, 196];
-// Bell pitches — A4..A5 covering a comfortable resonant range. Picked
-// natural diatonic so successive bells form a coherent melodic palette.
-const FREQS_BELL = [440, 523.25, 587.33, 659.25, 783.99, 880];
-const FREQS_DRIP = [800, 1000, 1200];
-const FREQS_SWELL = [600, 700, 820];
-
-/**
- * Pick a representative frequency for a preset. Exported so the client can
- * decide a frequency BEFORE sending to the bridge — the bridge stores it,
- * broadcasts it back, and the engine plays the layer with the agreed freq.
- * For presets that don't use pitched oscillators (texture/glitch/breath/drip/swell)
- * the value is symbolic — it's used by the visual layer for breathe-rate
- * and by the agent context for descriptive purposes.
- */
-export function pickFreqForType(type: LayerType): number {
-  switch (type) {
-    case 'drone':
-      return FREQS_LOW[Math.floor(Math.random() * FREQS_LOW.length)];
-    case 'pulse':
-      return FREQS_MID[Math.floor(Math.random() * FREQS_MID.length)];
-    case 'texture':
-      return 800;
-    case 'glitch':
-      return 1500;
-    case 'breath':
-      return 730;
-    case 'bell':
-      return FREQS_BELL[Math.floor(Math.random() * FREQS_BELL.length)];
-    case 'drip':
-      return FREQS_DRIP[Math.floor(Math.random() * FREQS_DRIP.length)];
-    case 'swell':
-      return FREQS_SWELL[Math.floor(Math.random() * FREQS_SWELL.length)];
-    case 'chord':
-      // Chord uses a low root; the build adds 5th + octave on top.
-      return FREQS_MID[Math.floor(Math.random() * FREQS_MID.length)];
-  }
-}
+// Frequency picking moved to the bridge (proxy/src/theory.ts) so player and
+// agent placements share a single per-session scale. The audio engine just
+// receives whatever pitch the bridge computed via the `layer_added` echo.
+//
+// What's left in this file is the *timbral* variation per instance: each
+// build* function widens detune, LFO speeds, envelope times, and filter
+// resonances so two layers of the same type at the same pitch still sound
+// distinguishably different.
 
 function buildDrone(freq: number): PresetBuild {
-  const detune = (Math.random() - 0.5) * 14;
+  // ±25 cents of detune (was ±7) — wide enough to actually hear beating
+  // between the saw and the sub, and so two drones at the same pitch in
+  // the same descent don't lock onto identical phase.
+  const detune = (Math.random() - 0.5) * 50;
   const osc = new Tone.Oscillator({ frequency: freq, type: 'sawtooth', detune });
   const sub = new Tone.Oscillator({ frequency: freq / 2, type: 'sine' });
-  const filter = new Tone.Filter({ frequency: 320, type: 'lowpass', Q: 1.2 });
+  // Cutoff fluctuates session-to-session: 220-450 Hz centre. Lower = more
+  // muffled, higher = more present.
+  const filterCenter = 220 + Math.random() * 230;
+  const filter = new Tone.Filter({
+    frequency: filterCenter,
+    type: 'lowpass',
+    // Q in 0.7..1.8 — at the high end the cutoff rings, giving the drone
+    // a vocal resonance; at the low end it sits as flat low-end weight.
+    Q: 0.7 + Math.random() * 1.1,
+  });
   const gain = new Tone.Gain(0);
   osc.connect(gain);
   sub.connect(gain);
   gain.connect(filter);
 
+  // LFO period 6.5–40s (was ~10–25s). Slow drones now actually drift slowly.
+  // LFO sweep range also varies: in dim mode it stays in the bass; in
+  // bright mode it climbs into mid territory before settling back.
+  const lfoMin = 120 + Math.random() * 160;
+  const lfoMax = 600 + Math.random() * 800;
   const lfo = new Tone.LFO({
-    frequency: 0.04 + Math.random() * 0.06,
-    min: 180,
-    max: 900,
+    frequency: 0.025 + Math.random() * 0.13,
+    min: lfoMin,
+    max: lfoMax,
     type: 'sine',
   }).start();
   lfo.connect(filter.frequency);
@@ -377,15 +363,24 @@ function buildDrone(freq: number): PresetBuild {
 
 function buildTexture(freq: number): PresetBuild {
   const noise = new Tone.Noise('pink');
-  const bp = new Tone.Filter({ frequency: freq, type: 'bandpass', Q: 4 });
+  // Bandpass Q 3..9 (was fixed 4). Low Q = airy hush, high Q = whistling
+  // resonance. Ranges chosen so neither extreme is unpleasant.
+  const bp = new Tone.Filter({
+    frequency: freq,
+    type: 'bandpass',
+    Q: 3 + Math.random() * 6,
+  });
   const gain = new Tone.Gain(0);
   noise.connect(bp);
   bp.connect(gain);
 
+  // LFO period ~5–35s (was 6–20s). Sweep range also widens session-to-session.
+  const lfoMin = 200 + Math.random() * 250;
+  const lfoMax = 1800 + Math.random() * 1800;
   const lfo = new Tone.LFO({
-    frequency: 0.05 + Math.random() * 0.1,
-    min: 350,
-    max: 2800,
+    frequency: 0.03 + Math.random() * 0.18,
+    min: lfoMin,
+    max: lfoMax,
     type: 'sine',
   }).start();
   lfo.connect(bp.frequency);
@@ -413,21 +408,30 @@ function buildTexture(freq: number): PresetBuild {
 }
 
 function buildPulse(freq: number): PresetBuild {
-  const osc = new Tone.Oscillator({ frequency: freq, type: 'triangle' });
+  // Pulse waveform varies — triangle is the soft default, sawtooth gives a
+  // more reedy/voicelike pulse, square gives a hollow chiptune-y one. Each
+  // session-instance picks one; the player perceives "different pulses".
+  const waveforms: Array<Tone.ToneOscillatorType> = ['triangle', 'sawtooth', 'square'];
+  const wave = waveforms[Math.floor(Math.random() * waveforms.length)];
+  const osc = new Tone.Oscillator({ frequency: freq, type: wave });
   const env = new Tone.AmplitudeEnvelope({
-    attack: 1.6,
-    decay: 0.6,
-    sustain: 0.5,
-    release: 2.2,
+    attack: 1.0 + Math.random() * 1.6,    // 1.0–2.6s (was 1.6 fixed)
+    decay: 0.4 + Math.random() * 0.7,     // 0.4–1.1s
+    sustain: 0.35 + Math.random() * 0.35, // 0.35–0.7
+    release: 1.5 + Math.random() * 1.8,   // 1.5–3.3s
   });
   const gain = new Tone.Gain(0.18);
   osc.connect(env);
   env.connect(gain);
   osc.start();
 
-  const interval = 4 + Math.random() * 3.5; // seconds
+  // Pulse interval 3–10s (was 4–7.5s). Tight pulses feel like a heartbeat;
+  // long pulses feel like slow breath. Note duration also varies so the
+  // pulse occasionally overlaps itself, occasionally leaves silence.
+  const interval = 3 + Math.random() * 7;
+  const noteDur = 1.6 + Math.random() * 2.4;
   const loop = new Tone.Loop((time) => {
-    env.triggerAttackRelease(2.4, time);
+    env.triggerAttackRelease(noteDur, time);
   }, interval).start(0);
 
   return {
@@ -454,22 +458,30 @@ function buildGlitch(freq: number): PresetBuild {
   const bp = new Tone.Filter({
     frequency: freq,
     type: 'bandpass',
-    Q: 8,
+    // Q 5–12 (was fixed 8) — narrow Q gives sharp pings, wide Q is more crackle.
+    Q: 5 + Math.random() * 7,
   });
   const gain = new Tone.Gain(0);
   noise.connect(bp);
   bp.connect(gain);
   noise.start();
 
+  // Subdivision varies between '16n' (frantic), '8n' (default), '4n' (sparse).
+  // Combined with probability 0.10–0.28 the glitch density spans clearly
+  // different "machinery on/off" rates between sessions.
+  const subdivisions = ['16n', '8n', '8n', '4n'];
+  const subdiv = subdivisions[Math.floor(Math.random() * subdivisions.length)];
+  // Decay 0.04–0.12s — short clicks vs longer crackles.
+  const decay = 0.04 + Math.random() * 0.08;
   const loop = new Tone.Loop((time) => {
     const target = 800 + Math.random() * 5000;
     bp.frequency.cancelScheduledValues(time);
     bp.frequency.setValueAtTime(target, time);
     gain.gain.cancelScheduledValues(time);
     gain.gain.setValueAtTime(0.16, time);
-    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.05);
-  }, '8n').start(0);
-  loop.probability = 0.18; // sparse, ambient
+    gain.gain.exponentialRampToValueAtTime(0.001, time + decay);
+  }, subdiv).start(0);
+  loop.probability = 0.10 + Math.random() * 0.18;
 
   return {
     output: gain,
@@ -491,16 +503,28 @@ function buildGlitch(freq: number): PresetBuild {
 
 function buildBreath(freq: number): PresetBuild {
   const noise = new Tone.Noise('pink');
-  // 'a'-vowel formant approximation — sounds like a hushed /aaa/.
-  const formants = [
-    { f: 730, q: 8, gain: 1.0 },
-    { f: 1090, q: 6, gain: 0.55 },
-    { f: 2440, q: 3, gain: 0.3 },
+  // Vowel rotation: each layer instance picks a different mouth-shape
+  // (formant set). /a/ is the default open vowel, /o/ is rounder, /i/
+  // higher and tighter, /u/ lower and dome-y. Adds a clear timbral
+  // distinction between two breath layers in the same descent.
+  const vowels = [
+    [{ f: 730, q: 8, gain: 1.0 }, { f: 1090, q: 6, gain: 0.55 }, { f: 2440, q: 3, gain: 0.3 }], // /a/
+    [{ f: 570, q: 9, gain: 1.0 }, { f: 840, q: 6, gain: 0.55 }, { f: 2410, q: 3, gain: 0.25 }], // /o/
+    [{ f: 270, q: 10, gain: 1.0 }, { f: 2290, q: 5, gain: 0.55 }, { f: 3010, q: 3, gain: 0.3 }], // /i/
+    [{ f: 300, q: 9, gain: 1.0 }, { f: 870, q: 6, gain: 0.5 }, { f: 2240, q: 3, gain: 0.25 }],  // /u/
   ];
+  const formants = vowels[Math.floor(Math.random() * vowels.length)];
+  // Per-instance pitch jitter ±10% so even the same vowel sounds slightly
+  // different from one breath to the next.
+  const jitter = 0.9 + Math.random() * 0.2;
   const sumGain = new Tone.Gain(1);
   const bps: Tone.Filter[] = [];
   for (const fm of formants) {
-    const bp = new Tone.Filter({ frequency: fm.f, type: 'bandpass', Q: fm.q });
+    const bp = new Tone.Filter({
+      frequency: fm.f * jitter,
+      type: 'bandpass',
+      Q: fm.q,
+    });
     const fg = new Tone.Gain(fm.gain);
     noise.connect(bp);
     bp.connect(fg);
@@ -508,20 +532,29 @@ function buildBreath(freq: number): PresetBuild {
     bps.push(bp);
   }
   noise.start();
+  // freq is unused for synthesis (vowel formants are absolute); mark as
+  // intentionally read so eslint/no-unused-vars stays happy and the visual
+  // breathe-rate that consumes it from the engine still gets a value.
+  void freq;
 
+  // Envelope timing widens session-to-session: attack 1.5–3.5s, release
+  // 2.0–4.5s. Combined with the interval below, two breath layers can
+  // either feel like the same long sigh or two clearly distinct exhales.
   const env = new Tone.AmplitudeEnvelope({
-    attack: 2.2,
-    decay: 1.0,
-    sustain: 0.5,
-    release: 3.0,
+    attack: 1.5 + Math.random() * 2.0,
+    decay: 0.6 + Math.random() * 0.8,
+    sustain: 0.35 + Math.random() * 0.3,
+    release: 2.0 + Math.random() * 2.5,
   });
   const out = new Tone.Gain(0.12);
   sumGain.connect(env);
   env.connect(out);
 
-  const interval = 5.5 + Math.random() * 2.5;
+  // 4–10s breath interval (was 5.5–8s). Hold time 2–4s.
+  const interval = 4 + Math.random() * 6;
+  const holdDur = 2.0 + Math.random() * 2.0;
   const loop = new Tone.Loop((time) => {
-    env.triggerAttackRelease(3.0, time);
+    env.triggerAttackRelease(holdDur, time);
   }, interval).start(0);
 
   return {
@@ -565,18 +598,21 @@ function buildBreath(freq: number): PresetBuild {
 
 function buildBell(freq: number): PresetBuild {
   // Two partials so it sings rather than buzzes: root + a slightly inharmonic
-  // octave. Bandpass softens the sharper component a touch.
+  // octave. Inharmonicity ratio 1.97–2.05 (was fixed 2.01) — at 1.97 the
+  // bell sounds slightly flat / sad, at 2.05 it's brassy / metallic. Per
+  // instance, so two bells in the same descent have a clear identity.
   const osc = new Tone.Oscillator({ frequency: freq, type: 'sine' });
   const harm = new Tone.Oscillator({
-    frequency: freq * 2.01, // detuned octave for a metallic shimmer
+    frequency: freq * (1.97 + Math.random() * 0.08),
     type: 'sine',
   });
-  const harmGain = new Tone.Gain(0.25);
+  const harmGain = new Tone.Gain(0.18 + Math.random() * 0.18); // 0.18–0.36
+  // Decay 4–8s (was 5.5 fixed) — short bell vs long bell.
   const env = new Tone.AmplitudeEnvelope({
-    attack: 0.01,
-    decay: 5.5,
+    attack: 0.008 + Math.random() * 0.02,
+    decay: 4 + Math.random() * 4,
     sustain: 0.0,
-    release: 1.5,
+    release: 1.2 + Math.random() * 1.0,
   });
   const out = new Tone.Gain(0.22);
   osc.connect(env);
@@ -586,12 +622,14 @@ function buildBell(freq: number): PresetBuild {
   osc.start();
   harm.start();
 
-  // Strike every 8–12 sec with a small probability of a quieter "ghost" double.
-  const interval = 8 + Math.random() * 4;
+  // Strike interval 6–14s (was 8–12s). Ghost-strike probability 0.10–0.40.
+  // Some bells now never echo, others have a near-constant trail.
+  const interval = 6 + Math.random() * 8;
+  const ghostProb = 0.10 + Math.random() * 0.30;
   const loop = new Tone.Loop((time) => {
     env.triggerAttackRelease(6.0, time);
-    if (Math.random() < 0.18) {
-      env.triggerAttackRelease(2.5, time + 0.7 + Math.random() * 0.4);
+    if (Math.random() < ghostProb) {
+      env.triggerAttackRelease(2.5, time + 0.6 + Math.random() * 0.6);
     }
   }, interval).start(0);
 
@@ -617,15 +655,21 @@ function buildBell(freq: number): PresetBuild {
 }
 
 function buildDrip(freq: number): PresetBuild {
-  // Quick tonal pluck — sine + lowpass + steep envelope. We re-trigger at
-  // irregular intervals so drips feel like cave water, not a clock.
+  // Quick tonal pluck — sine + lowpass + steep envelope.
   const osc = new Tone.Oscillator({ frequency: freq, type: 'sine' });
-  const lp = new Tone.Filter({ frequency: freq * 2.5, type: 'lowpass', Q: 4 });
+  // LP cutoff 1.8x–3.5x of fundamental (was fixed 2.5x). Lower = duller "tup",
+  // higher = brighter "ping". Q 3–7 — varies how much resonance "rings".
+  const lp = new Tone.Filter({
+    frequency: freq * (1.8 + Math.random() * 1.7),
+    type: 'lowpass',
+    Q: 3 + Math.random() * 4,
+  });
+  // Decay 0.30–0.65s — staccato drips vs slightly liquid drips.
   const env = new Tone.AmplitudeEnvelope({
-    attack: 0.003,
-    decay: 0.45,
+    attack: 0.002 + Math.random() * 0.005,
+    decay: 0.30 + Math.random() * 0.35,
     sustain: 0.0,
-    release: 0.3,
+    release: 0.2 + Math.random() * 0.25,
   });
   const out = new Tone.Gain(0.28);
   osc.connect(lp);
@@ -633,12 +677,14 @@ function buildDrip(freq: number): PresetBuild {
   env.connect(out);
   osc.start();
 
-  // Loop at a tight base interval, then probabilistically gate. With p=0.22
-  // the average drip rate is about one every 3 seconds, with natural clustering.
+  // Loop interval 0.45–1.15s (was 0.65 fixed) and probability 0.12–0.32
+  // (was 0.22 fixed). Combined: average drip rate from one every ~1.4s
+  // (busy splash) to one every ~7s (rare cave drip).
+  const baseInterval = 0.45 + Math.random() * 0.7;
   const loop = new Tone.Loop((time) => {
     env.triggerAttackRelease(0.5, time);
-  }, 0.65).start(0);
-  loop.probability = 0.22;
+  }, baseInterval).start(0);
+  loop.probability = 0.12 + Math.random() * 0.20;
 
   return {
     output: out,
@@ -665,26 +711,39 @@ function buildSwell(freq: number): PresetBuild {
   // amplitude and the filter so the swell "approaches and passes" rather than
   // staying glued in place.
   const noise = new Tone.Noise('pink');
-  const bp = new Tone.Filter({ frequency: freq, type: 'bandpass', Q: 6 });
+  // Q 4–10 (was fixed 6) — at low Q the swell is broad and woolly, at high
+  // Q it has a clear singing pitch as it passes.
+  const bp = new Tone.Filter({
+    frequency: freq,
+    type: 'bandpass',
+    Q: 4 + Math.random() * 6,
+  });
   const gain = new Tone.Gain(0);
   noise.connect(bp);
   bp.connect(gain);
 
-  // Amplitude wave: ~10 sec cycle (4s up, 2s plateau, 4s down).
+  // Amplitude wave period 6–18s (was 10s fixed). Peak amplitude 0.10–0.18.
+  // Same swell can either feel like a slow tide or a quick gust.
+  const ampPeriod = 6 + Math.random() * 12;
+  const ampPeak = 0.10 + Math.random() * 0.08;
   const amp = new Tone.LFO({
-    frequency: 0.1, // 10s period
+    frequency: 1 / ampPeriod,
     min: 0,
-    max: 0.16,
+    max: ampPeak,
     type: 'sine',
   }).start();
   amp.connect(gain.gain);
 
-  // Filter wave: half the period, offset, so the timbre brightens as it
-  // swells and dulls as it recedes.
+  // Filter LFO at half the amp period, offset, so timbre brightens as it
+  // swells and dulls as it recedes. Sweep span 0.4x–2.0x freq (was fixed
+  // 0.6x–1.6x) — wide-sweep swells feel like a doppler pass, narrow ones
+  // sit more like a stationary cloud.
+  const sweepLow = 0.4 + Math.random() * 0.3;   // 0.4–0.7
+  const sweepHigh = 1.4 + Math.random() * 0.6;  // 1.4–2.0
   const filterLfo = new Tone.LFO({
-    frequency: 0.05,
-    min: freq * 0.6,
-    max: freq * 1.6,
+    frequency: 1 / (ampPeriod * 2),
+    min: freq * sweepLow,
+    max: freq * sweepHigh,
     type: 'sine',
     phase: 90,
   }).start();
@@ -715,27 +774,36 @@ function buildSwell(freq: number): PresetBuild {
 function buildChord(rootFreq: number): PresetBuild {
   // Three sine partials: root, perfect fifth (×1.5), octave (×2). Slow attack
   // so the chord opens like a window rather than punching in.
+  // Wider per-instance detuning (was -3/+4 cents fixed): each chord now has
+  // its own beating rate and "color" — beats every ~3-12s.
   const root = new Tone.Oscillator({ frequency: rootFreq, type: 'sine' });
   const fifth = new Tone.Oscillator({
     frequency: rootFreq * 1.5,
     type: 'sine',
-    detune: -3,
+    detune: -10 + Math.random() * 8,   // -10..-2
   });
   const oct = new Tone.Oscillator({
     frequency: rootFreq * 2,
     type: 'sine',
-    detune: 4,
+    detune: -2 + Math.random() * 12,   // -2..+10
   });
-  const fifthGain = new Tone.Gain(0.6);
-  const octGain = new Tone.Gain(0.4);
+  // Voice balance also varies — bright instances lean on the octave,
+  // mellow instances lean on the fifth.
+  const fifthGain = new Tone.Gain(0.45 + Math.random() * 0.25); // 0.45–0.70
+  const octGain = new Tone.Gain(0.25 + Math.random() * 0.30);   // 0.25–0.55
   const sum = new Tone.Gain(1);
   root.connect(sum);
   fifth.connect(fifthGain);
   fifthGain.connect(sum);
   oct.connect(octGain);
   octGain.connect(sum);
-  // Soft lowpass to prevent the upper octave from getting shrill.
-  const lp = new Tone.Filter({ frequency: 1800, type: 'lowpass', Q: 0.7 });
+  // Soft lowpass cutoff varies 1300–2400 Hz (was 1800 fixed). Lower = warmer,
+  // higher = brighter chord. Q stays soft so it doesn't ring.
+  const lp = new Tone.Filter({
+    frequency: 1300 + Math.random() * 1100,
+    type: 'lowpass',
+    Q: 0.6 + Math.random() * 0.3,
+  });
   sum.connect(lp);
 
   // Earlier the chord's gain ramped to 0.13 and then sustained forever —
@@ -753,10 +821,15 @@ function buildChord(rootFreq: number): PresetBuild {
   // LFO target; outFinal is a normal AudioParam we ramp down on dispose.
   const outDriven = new Tone.Gain(0);
   lp.connect(outDriven);
+  // Breathe period 16–32s (was 24s fixed) and peak 0.10–0.18 (was 0.14).
+  // Different chord layers in the same descent now swell at different
+  // rates rather than locking into one global breath.
+  const breathePeriod = 16 + Math.random() * 16;
+  const breathePeak = 0.10 + Math.random() * 0.08;
   const breathe = new Tone.LFO({
-    frequency: 1 / 24, // 24-second period
+    frequency: 1 / breathePeriod,
     min: 0,
-    max: 0.14,
+    max: breathePeak,
     type: 'sine',
     phase: 270,
   }).start();

@@ -10,7 +10,6 @@ import {
   captureSpectrum,
   fadeOutMaster,
   initAudio,
-  pickFreqForType,
   setGlobalDepth,
   startRecording,
   stopRecording,
@@ -259,13 +258,13 @@ export function App() {
     if (s.cooldownEndsAt && Date.now() < s.cooldownEndsAt) return;
     if (s.layers.length >= s.maxLayers) return;
 
-    const type = s.selectedPreset;
-    const freq = pickFreqForType(type);
+    // Pitch is decided server-side from the descent's scale (theory.ts);
+    // we just send type + position. The bridge echoes back the chosen
+    // freq via `layer_added`, which is what addLayer() actually plays.
     bridgeRef.current?.send({
       type: 'place_layer',
-      layerType: type,
+      layerType: s.selectedPreset,
       position: point,
-      freq,
     });
   };
 
