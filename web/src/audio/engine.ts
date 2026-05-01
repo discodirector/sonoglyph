@@ -515,17 +515,13 @@ function buildDrone(freq: number): PresetBuild {
   osc.start();
   sub.start();
   octUp.start();
-  // Master env target 0.055 (cumulative cuts: 0.16 → 0.112 → 0.0896 →
-  // 0.07168 → 0.055). Drone is the densest single voice in the mix,
-  // and successive listener feedback kept reporting it as too loud +
-  // crackling on peaks. The latest cut accompanies the LFO removal:
-  // we sacrifice some presence here so even if the click turns out
-  // to be a system-level artifact (audio thread jitter, driver
-  // glitch), the absolute level is low enough that it'd be hard to
-  // hear. Per-instance peak math with triangle fund + sub + octUp:
-  // ~1.4 internal worst case × 0.055 = 0.077 instantaneous, well
-  // clear of the limiter even with 5 drones stacked.
-  gain.gain.rampTo(0.055, 4);
+  // Master env target 0.06875 (cumulative chain: 0.16 → 0.112 → 0.0896
+  // → 0.07168 → 0.055 → 0.06875 with +25% restoration round). Once
+  // the click bug was tracked down to HRTF + listener updates and the
+  // mix was clean, we could safely bump the levels back up — the
+  // listener requested +25% across all presets to restore presence
+  // that had been progressively lost during the click hunt.
+  gain.gain.rampTo(0.06875, 4);
 
   return {
     output: gain,
@@ -575,7 +571,8 @@ function buildTexture(freq: number): PresetBuild {
   lfo.connect(bp.frequency);
 
   noise.start();
-  gain.gain.rampTo(0.09, 5);
+  // texture env: 0.09 → 0.1125 (+25% post-click-fix restoration round).
+  gain.gain.rampTo(0.1125, 5);
 
   return {
     output: gain,
@@ -626,12 +623,13 @@ function buildPulse(freq: number): PresetBuild {
     sustain: 0.35 + Math.random() * 0.35, // 0.35–0.7
     release: 1.5 + Math.random() * 1.8,   // 1.5–3.3s
   });
-  // Out gain 0.1152 (cumulative: 0.18 → 0.144 → 0.1152). Pulse's
-  // repeating attack envelope means multiple instances can hit on
-  // overlapping cycles and stack — dropping the per-instance peak
-  // gives the master limiter room when 3-4 pulses align, and
-  // continued listener feedback flagged pulse as still too prominent.
-  const gain = new Tone.Gain(0.1152);
+  // Out gain 0.144 (cumulative chain: 0.18 → 0.144 → 0.1152 → 0.144
+  // with +25% post-click-fix restoration). Pulse's repeating attack
+  // envelope means multiple instances can hit on overlapping cycles
+  // and stack — but with the click bug fixed and limiter no longer
+  // pumping on transients, the headroom analysis shows pulse can
+  // sit comfortably at 0.144 even with 3-4 instances aligning.
+  const gain = new Tone.Gain(0.144);
   osc.connect(filter);
   filter.connect(env);
   env.connect(gain);
@@ -691,7 +689,8 @@ function buildGlitch(freq: number): PresetBuild {
     bp.frequency.cancelScheduledValues(time);
     bp.frequency.setValueAtTime(target, time);
     gain.gain.cancelScheduledValues(time);
-    gain.gain.setValueAtTime(0.16, time);
+    // glitch peak: 0.16 → 0.20 (+25% post-click-fix restoration).
+    gain.gain.setValueAtTime(0.20, time);
     gain.gain.exponentialRampToValueAtTime(0.001, time + decay);
   }, subdiv).start(0);
   loop.probability = 0.10 + Math.random() * 0.18;
@@ -759,7 +758,8 @@ function buildBreath(freq: number): PresetBuild {
     sustain: 0.35 + Math.random() * 0.3,
     release: 2.0 + Math.random() * 2.5,
   });
-  const out = new Tone.Gain(0.12);
+  // breath out gain 0.12 → 0.15 (+25% post-click-fix restoration).
+  const out = new Tone.Gain(0.15);
   sumGain.connect(env);
   env.connect(out);
 
@@ -827,13 +827,14 @@ function buildBell(freq: number): PresetBuild {
     sustain: 0.0,
     release: 1.2 + Math.random() * 1.0,
   });
-  // Out gain 0.09856 (cumulative: 0.22 → 0.154 → 0.1232 → 0.09856).
-  // Bells stand out in the mix because their decay envelope is longer
-  // than most layer types — multiple overlapping bells stack into a
-  // sustained chord-of-bells, and the original 0.22 ceiling pushed the
-  // cumulative bell loudness above the surrounding layers. Successive
-  // cuts bring the bell tail in line with pads + cut drone/chord/etc.
-  const out = new Tone.Gain(0.09856);
+  // Out gain 0.1232 (cumulative: 0.22 → 0.154 → 0.1232 → 0.09856 →
+  // 0.1232 with +25% post-click-fix restoration). Bells stand out
+  // because their decay envelope is longer than most layer types —
+  // multiple overlapping bells stack into a sustained chord-of-bells,
+  // but with the mix clean and listener requesting more presence,
+  // we bring bell back up. 0.1232 is the same level we had two cuts
+  // ago, which felt balanced before the click hunt forced it lower.
+  const out = new Tone.Gain(0.1232);
   osc.connect(env);
   harm.connect(harmGain);
   harmGain.connect(env);
@@ -890,13 +891,15 @@ function buildDrip(freq: number): PresetBuild {
     sustain: 0.0,
     release: 0.2 + Math.random() * 0.25,
   });
-  // Out gain 0.12544 (cumulative: 0.28 → 0.196 → 0.1568 → 0.12544).
-  // Drip's transient attack puts most of its energy in a sub-millisecond
-  // peak that the ear reads as "loud" disproportionate to its perceived
-  // RMS — the original 0.28 made dense drip sequences pop above the
-  // rest of the mix. Successive cuts pull the transient peak down
-  // without losing the staccato bite.
-  const out = new Tone.Gain(0.12544);
+  // Out gain 0.1568 (cumulative: 0.28 → 0.196 → 0.1568 → 0.12544 →
+  // 0.1568 with +25% post-click-fix restoration). Drip's transient
+  // attack puts most of its energy in a sub-millisecond peak that the
+  // ear reads as "loud" disproportionate to its RMS, so it sat too
+  // prominent originally — but at 0.1568 the staccato bite returns
+  // without dominating now that the master limiter no longer pumps
+  // on transient peaks (the actual click cause turned out to be HRTF,
+  // not transients).
+  const out = new Tone.Gain(0.1568);
   osc.connect(lp);
   lp.connect(env);
   env.connect(out);
@@ -947,10 +950,11 @@ function buildSwell(freq: number): PresetBuild {
   noise.connect(bp);
   bp.connect(gain);
 
-  // Amplitude wave period 6–18s (was 10s fixed). Peak amplitude 0.10–0.18.
-  // Same swell can either feel like a slow tide or a quick gust.
+  // Amplitude wave period 6–18s. Peak amplitude 0.125–0.225 (was
+  // 0.10–0.18, +25% post-click-fix restoration). Same swell can either
+  // feel like a slow tide or a quick gust.
   const ampPeriod = 6 + Math.random() * 12;
-  const ampPeak = 0.10 + Math.random() * 0.08;
+  const ampPeak = 0.125 + Math.random() * 0.10;
   const amp = new Tone.LFO({
     frequency: 1 / ampPeriod,
     min: 0,
@@ -1046,17 +1050,14 @@ function buildChord(rootFreq: number): PresetBuild {
   // LFO target; outFinal is a normal AudioParam we ramp down on dispose.
   const outDriven = new Tone.Gain(0);
   lp.connect(outDriven);
-  // Breathe period 16–32 s. Peak 0.0358–0.06451 (cumulative chain:
+  // Breathe period 16–32 s. Peak 0.0448–0.0806 (cumulative chain:
   // 0.10–0.18 → 0.07–0.126 → 0.056–0.1008 → 0.0448–0.08064 → 0.0358–
-  // 0.06451). Like buildDrone above, the chord's internal sum (root +
-  // 0.45-0.7×fifth + 0.25-0.55×oct ≈ 2.25 worst case) gets scaled by
-  // the LFO peak to produce per-instance output. The latest -20%
-  // adds defensive headroom for the rare moment when 3 detuned sines
-  // align constructively — the instantaneous peak (3.0×breathePeak ≈
-  // 0.19 at max) is well clear of the limiter, leaving room for the
-  // limiter to catch transients without clamping the steady tone.
+  // 0.06451 → 0.0448–0.0806 with +25% post-click-fix restoration).
+  // Chord's internal sum (root + 0.45-0.7×fifth + 0.25-0.55×oct ≈
+  // 2.25 worst case) scaled by LFO peak: instantaneous peak ~0.18 at
+  // max, well clear of any clipping ceiling.
   const breathePeriod = 16 + Math.random() * 16;
-  const breathePeak = 0.0358 + Math.random() * 0.02867;
+  const breathePeak = 0.0448 + Math.random() * 0.0358;
   const breathe = new Tone.LFO({
     frequency: 1 / breathePeriod,
     min: 0,
