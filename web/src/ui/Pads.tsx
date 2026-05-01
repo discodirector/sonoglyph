@@ -258,19 +258,22 @@ function PadsHint({ visible }: { visible: boolean }) {
         //   - container's BOTTOM edge must be at bottom > 239 (else
         //     the bottom of the SVG slips behind the panel top)
         //
-        // (right: 320, bottom: 245) gives:
+        // (right: 320, bottom: 210) gives:
         //   - container right edge at right: 320 → 22 px LEFT of
-        //     panel left edge (clear)
-        //   - container bottom edge at bottom: 245 → 6 px ABOVE
-        //     panel top (clear)
-        //   - SVG arrow tip at viewport (right: 332, bottom: 257)
-        //     — ~34 px left, ~18 px above the panel's top-left
-        //     corner. Reads as "approaching the top-left corner
-        //     from upper-left, stopping short", which is what we
-        //     want: the eye follows the arrow into the corner
-        //     without the arrow itself overlapping the panel.
+        //     panel left edge: still fully LEFT of the panel
+        //     horizontally, so there's no z-stacking conflict
+        //     (the two boxes don't intersect, they sit side by
+        //     side).
+        //   - container bottom edge at bottom: 210 → tucks the
+        //     SVG vertically alongside the panel's upper third
+        //     instead of floating above its top edge. The arrow
+        //     tip lands at viewport (right: 332, bottom: 222),
+        //     which points at the left edge of the panel just
+        //     below the top-left corner — chosen by ear/eye
+        //     after the bottom: 245 version felt too detached
+        //     from the panel.
         right: 320,
-        bottom: 245,
+        bottom: 210,
         zIndex: 19,
         pointerEvents: 'none',
         opacity: visible ? 1 : 0,
