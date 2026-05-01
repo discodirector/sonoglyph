@@ -95,10 +95,12 @@ export async function initAudio(): Promise<void> {
   }
 
   // Pads bus — single shared bus for all three atmospheric pad voices.
-  // Default 0.7 so pads can't outweigh the placed-layer composition; the
-  // perceived "pads volume" comes from how many pads are simultaneously
-  // engaged + the pads' own internal envelopes, not from a UI fader.
-  padBus = new Tone.Gain(0.7);
+  // Gain 0.45 (was 0.7) — pads are background atmosphere, not lead voices,
+  // and the previous 0.7 was loud enough to compete with placed layers
+  // when more than one pad was engaged. The relative balance between
+  // GLOW / AIR / DEEP is set per-pad by PAD_PEAK; this bus just attenuates
+  // the whole group so they sit *under* the composition.
+  padBus = new Tone.Gain(0.45);
   padBus.connect(master);
   padBus.connect(reverbSend);
 
@@ -1297,13 +1299,24 @@ export function startPad(id: PadId, scale: SessionScalePublic): void {
   env.connect(padBus);
 
   for (const o of voice.oscillators) o.start();
-  // Attack 4 s — typical for pad voices, well within the "0.5–4 sec" range
-  // the brief specifies.
-  env.gain.rampTo(PAD_PEAK[id], 4);
+  // Attack 12 s — pad swell is the whole point. 4 s read as "punched in";
+  // 12 s is "material slowly forming" — the texture is fully present only
+  // by the time the next layer turn rolls around. Tone's linear rampTo
+  // from a Gain at 0 to PAD_PEAK is smooth across the full duration.
+  env.gain.rampTo(PAD_PEAK[id], 12);
 
   padHandles.set(id, () => {
-    env.gain.cancelScheduledValues(Tone.now());
-    env.gain.rampTo(0, 3);
+    // Release 6 s. Don't manually cancelScheduledValues — Tone.Param.rampTo
+    // already calls setRampPoint→cancelAndHoldAtTime internally, and a
+    // duplicate external cancel can leave a tiny window where the
+    // AudioParam value drifts before the new ramp anchors, which can
+    // produce a tick on dispose. Letting rampTo own the cancel keeps the
+    // taper monotonic from current value to 0.
+    env.gain.rampTo(0, 6);
+    // Buffer 6.5 s — comfortably past the 6 s ramp end so env.gain has
+    // settled at exactly 0 before any oscillator/LFO is stopped. Stopping
+    // an oscillator while the gain is still tiny-but-nonzero is what makes
+    // the click on tear-down audible.
     window.setTimeout(() => {
       try {
         for (const o of voice.oscillators) o.stop().dispose();
@@ -1312,7 +1325,7 @@ export function startPad(id: PadId, scale: SessionScalePublic): void {
       } catch {
         /* already disposed */
       }
-    }, 3200);
+    }, 6500);
   });
 }
 
