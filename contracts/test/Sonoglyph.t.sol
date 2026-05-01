@@ -14,7 +14,8 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  *   - input validation: zero `to`, empty glyph, empty audioCid all revert
  *   - tokenURI returns a `data:application/json;base64,` payload whose decoded
  *     JSON contains the journal as description + an SVG-dataURL image +
- *     `ipfs://` animation_url
+ *     an HTML-dataURL animation_url that embeds the glyph and references
+ *     the audio via an IPFS gateway
  *   - tokenURI on a non-existent tokenId reverts with the standard ERC-721
  *     "nonexistent token" error
  *   - JSON escaping: a journal containing `"` and newlines decodes back to
@@ -147,9 +148,66 @@ contract SonoglyphTest is Test {
         assertTrue(_contains(json, '"name":"Sonoglyph #1"'));
         assertTrue(_contains(json, "We descended past the seventh marker"));
         assertTrue(_contains(json, "data:image/svg+xml;base64,"));
-        assertTrue(_contains(json, string.concat('"animation_url":"ipfs://', SAMPLE_CID, '"')));
+        // animation_url is now a self-contained HTML dataURL, not an
+        // ipfs:// link to raw audio. The audio CID itself lives inside
+        // the decoded HTML — see test_tokenURI_animationUrlIsValidHtml.
+        assertTrue(_contains(json, '"animation_url":"data:text/html;base64,'));
         assertTrue(_contains(json, '"external_url":"https://sonoglyph.xyz"'));
         assertTrue(_contains(json, string.concat('"value":"', SAMPLE_CODE, '"')));
+    }
+
+    function test_tokenURI_animationUrlIsValidHtml() public {
+        vm.prank(bridge);
+        nft.mintDescent(player, SAMPLE_GLYPH, SAMPLE_JOURNAL, SAMPLE_CID, SAMPLE_CODE);
+
+        string memory uri = nft.tokenURI(1);
+        string memory json =
+            string(_decodeB64(_after(bytes(uri), bytes("data:application/json;base64,"))));
+
+        // Pull the animation_url HTML payload back out and decode it.
+        bytes memory anchor = bytes('"animation_url":"data:text/html;base64,');
+        bytes memory afterAnchor = _after(bytes(json), anchor);
+        uint256 quoteAt = _indexOf(afterAnchor, bytes('"'));
+        bytes memory htmlB64 = _slice(afterAnchor, 0, quoteAt);
+        string memory html = string(_decodeB64(htmlB64));
+
+        // Required structural pieces.
+        assertTrue(_contains(html, "<!doctype html>"));
+        assertTrue(_contains(html, "<audio"));
+        // Audio src must point at a public IPFS gateway (ipfs.io) carrying
+        // the descent's CID — that's the link that lets a marketplace iframe
+        // actually play the audio without needing the `ipfs://` scheme.
+        assertTrue(_contains(html, string.concat("https://ipfs.io/ipfs/", SAMPLE_CID)));
+        // Glyph is embedded verbatim (escaped) so the visual matches the SVG.
+        assertTrue(_contains(html, ". - + ."));
+        // Footer carries the brand + session code.
+        assertTrue(_contains(html, "SONOGLYPH"));
+        assertTrue(_contains(html, SAMPLE_CODE));
+    }
+
+    function test_tokenURI_animationUrlEscapesHtmlInGlyph() public {
+        // A glyph containing characters that MUST be HTML-escaped to avoid
+        // breaking the surrounding markup. If escaping fails, the `<` would
+        // start a fake tag and the page would render incorrectly.
+        string memory tricky = "< > & \" '";
+        vm.prank(bridge);
+        nft.mintDescent(player, tricky, SAMPLE_JOURNAL, SAMPLE_CID, SAMPLE_CODE);
+
+        string memory uri = nft.tokenURI(1);
+        string memory json =
+            string(_decodeB64(_after(bytes(uri), bytes("data:application/json;base64,"))));
+        bytes memory anchor = bytes('"animation_url":"data:text/html;base64,');
+        bytes memory afterAnchor = _after(bytes(json), anchor);
+        uint256 quoteAt = _indexOf(afterAnchor, bytes('"'));
+        string memory html = string(_decodeB64(_slice(afterAnchor, 0, quoteAt)));
+
+        // The glyph block should contain entity-encoded versions, NOT raw
+        // markup characters. We look for the entities we expect to see.
+        assertTrue(_contains(html, "&lt;"));
+        assertTrue(_contains(html, "&gt;"));
+        assertTrue(_contains(html, "&amp;"));
+        assertTrue(_contains(html, "&quot;"));
+        assertTrue(_contains(html, "&apos;"));
     }
 
     function test_tokenURI_imagePayloadIsValidSvg() public {

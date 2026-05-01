@@ -30,8 +30,16 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
  *   - `description`     — the journal (escaped for JSON)
  *   - `image`           — data:image/svg+xml;base64,<svg> with the glyph
  *                         drawn as monospace text on a black canvas
- *   - `animation_url`   — ipfs://<audioCid>, lets marketplaces play the
- *                         recording (OpenSea, Rarible, custom viewers)
+ *                         (used by marketplaces for the thumbnail)
+ *   - `animation_url`   — data:text/html;base64,<html> — a self-contained
+ *                         page that renders the same glyph PLUS an
+ *                         <audio> element fetching the recording from an
+ *                         IPFS gateway. This is what marketplaces show
+ *                         when the NFT is "opened": one click → user sees
+ *                         the art AND hears the audio together. Without
+ *                         this, OpenSea would default to an audio-only
+ *                         player and the glyph would only appear as a
+ *                         small thumbnail.
  *   - `external_url`    — https://sonoglyph.xyz
  *   - `attributes`      — session code, token id, mint timestamp
  *
@@ -130,27 +138,38 @@ contract Sonoglyph is ERC721, Ownable {
     }
 
     /**
-     * @notice Token URI — fully on-chain JSON+SVG dataURL.
+     * @notice Token URI — fully on-chain JSON + SVG + HTML dataURLs.
      * @dev Returns `data:application/json;base64,<...>` where the decoded
-     *      JSON has `image` (SVG dataURL) and `animation_url` (ipfs://) fields.
+     *      JSON has:
+     *        - `image`         — SVG dataURL (the art only, used as preview)
+     *        - `animation_url` — HTML dataURL (art + <audio>, used by
+     *                            marketplaces for the main "open" view)
+     *      Audio bytes still live on IPFS; the HTML page references them via
+     *      a public gateway so an iframe can fetch them.
      */
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         _requireOwned(tokenId);
         Descent memory d = _descents[tokenId];
 
-        string memory svg = _renderSvg(d);
         string memory imageDataUrl = string.concat(
             "data:image/svg+xml;base64,",
-            Base64.encode(bytes(svg))
+            Base64.encode(bytes(_renderSvg(d)))
+        );
+        string memory animationDataUrl = string.concat(
+            "data:text/html;base64,",
+            Base64.encode(bytes(_renderHtml(d)))
         );
 
         // Full JSON metadata. We escape user content (glyph, journal) for
         // JSON-string safety; everything else is contract-controlled.
+        // Note: imageDataUrl / animationDataUrl don't need JSON-escaping
+        // because base64 alphabet (A-Z a-z 0-9 + / =) and the prefixes
+        // (`data:...;base64,`) contain no JSON special characters.
         string memory json = string.concat(
             '{"name":"Sonoglyph #', tokenId.toString(), '"',
             ',"description":"', _escapeJson(d.journal), '"',
             ',"image":"', imageDataUrl, '"',
-            ',"animation_url":"ipfs://', d.audioCid, '"',
+            ',"animation_url":"', animationDataUrl, '"',
             ',"external_url":"https://sonoglyph.xyz"',
             ',"attributes":', _renderAttributes(d, tokenId),
             "}"
@@ -184,6 +203,61 @@ contract Sonoglyph is ERC721, Ownable {
             _escapeHtml(d.sessionCode),
             "</text>",
             "</svg>"
+        );
+    }
+
+    /**
+     * @notice Self-contained HTML page used as the NFT's animation_url.
+     *
+     * Marketplaces that load animation_url in an iframe (OpenSea, Rarible,
+     * MagicEden, MonadVision) render this directly. The viewer sees the
+     * glyph in the same orange monospace as the SVG image, with an
+     * HTML5 <audio> player below it pointing at a public IPFS gateway.
+     * One click → art + audio together. Without this, OpenSea falls back
+     * to its built-in audio-only player and the glyph only appears as a
+     * tiny thumbnail.
+     *
+     * Why ipfs.io as the gateway: data: URIs can't reference `ipfs://`
+     * directly (that scheme isn't resolvable from inside an iframe), so
+     * we need an HTTPS gateway. Audio bytes are content-addressed by CID,
+     * so any public gateway resolves to the same file — ipfs.io is the
+     * most universally available.
+     *
+     * Autoplay: most browsers/iframes block sound without a user gesture,
+     * so we rely on the visible <audio controls> for the play button.
+     * `autoplay loop` are kept as hints — they kick in once the user has
+     * interacted with the page.
+     *
+     * Sized in `vmin` units so the layout reads well in any iframe aspect
+     * ratio: square (OpenSea), wide (Twitter card), tall (mobile).
+     */
+    function _renderHtml(Descent memory d) internal pure returns (string memory) {
+        // Split into head (verbatim CSS) and body (token-specific). Two
+        // string.concat calls keep arg counts comfortably under any
+        // stack-depth limit and make the structure readable.
+        string memory head = string.concat(
+            '<!doctype html><html lang="en"><head><meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width,initial-scale=1">',
+            '<title>Sonoglyph</title><style>',
+            'html,body{margin:0;height:100%;background:#050507;color:#c9885b;',
+            'font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden}',
+            'body{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4vmin}',
+            'pre{font-size:1.6vmin;line-height:1.05;letter-spacing:.05em;margin:0;text-align:center;white-space:pre;text-shadow:0 0 6px rgba(201,136,91,.2)}',
+            'audio{width:60vmin;max-width:520px;margin-top:6vmin;filter:invert(.85)}',
+            '.foot{margin-top:4vmin;display:flex;flex-direction:column;align-items:center;gap:.6vmin;color:#6a6660;font-size:1.2vmin;letter-spacing:.4em}',
+            '.code{color:#4a463f;font-size:1vmin;letter-spacing:.3em}',
+            '</style></head><body>'
+        );
+        return string.concat(
+            head,
+            "<pre>",
+            _escapeHtml(d.glyph),
+            '</pre><audio src="https://ipfs.io/ipfs/',
+            _escapeHtml(d.audioCid),
+            '" controls autoplay loop preload="auto"></audio>',
+            '<div class="foot">SONOGLYPH<div class="code">',
+            _escapeHtml(d.sessionCode),
+            "</div></div></body></html>"
         );
     }
 
