@@ -17,22 +17,38 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
   const agentConnected = useSession((s) => s.agentConnected);
   const proxyOk = useSession((s) => s.proxyOk);
 
+  // Two-layer container so the intro can grow taller than the viewport
+  // (e.g. the troubleshooter is expanded with the long Hermes-patch
+  // prompt) without the centered flex layout pushing upper UI off-screen
+  // — earlier versions used just `position:fixed; justifyContent:center`,
+  // which clips the top half of overflowing content and leaves no way to
+  // scroll back to it. With min-height:100% on the inner box, content
+  // stays centered when it fits and naturally grows past the viewport
+  // when it doesn't, with the outer box providing the scrollbar.
   return (
     <div
       style={{
         position: 'fixed',
         inset: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 24,
-        textAlign: 'center',
-        padding: '32px 24px',
+        overflowY: 'auto',
+        overflowX: 'hidden',
         pointerEvents: 'auto',
         color: '#d8d4cf',
       }}
     >
+      <div
+        style={{
+          minHeight: '100%',
+          boxSizing: 'border-box',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 24,
+          textAlign: 'center',
+          padding: '32px 24px',
+        }}
+      >
       <h1
         style={{
           letterSpacing: '0.45em',
@@ -99,6 +115,7 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
       >
         Begin descent
       </button>
+      </div>
     </div>
   );
 }
@@ -201,14 +218,29 @@ function PairingPanel({
             specifically and were authored by the Sonoglyph developer's own
             Hermes.
           </div>
-          <CommandBlock body={HERMES_FIX_PROMPT} />
+          <CommandBlock body={HERMES_FIX_PROMPT} scrollable />
         </div>
       </details>
     </div>
   );
 }
 
-function CommandBlock({ label, body }: { label?: string; body: string }) {
+function CommandBlock({
+  label,
+  body,
+  scrollable,
+}: {
+  label?: string;
+  body: string;
+  /**
+   * Cap the <pre> at ~320 px with an internal scrollbar instead of
+   * letting it expand to fit the whole body. Use for long bodies (the
+   * Hermes-fix prompt is ~50 lines) so the page doesn't grow to 2000+
+   * px just to render a single block. The outer page is still
+   * scrollable as a safety net.
+   */
+  scrollable?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
   const onCopy = async () => {
     try {
@@ -242,6 +274,8 @@ function CommandBlock({ label, body }: { label?: string; body: string }) {
             wordBreak: 'break-all',
             maxWidth: '100%',
             lineHeight: 1.6,
+            maxHeight: scrollable ? 320 : undefined,
+            overflowY: scrollable ? 'auto' : undefined,
           }}
         >
           {body}
