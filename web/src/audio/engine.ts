@@ -60,33 +60,11 @@ let initialized = false;
  * (reverb chain, layer presets) and we move the diagnostic there.
  */
 let master: Tone.Gain;
-/**
- * Subsonic high-pass — sits in series between `master` and
- * `masterDuck`. Cuts everything below ~40 Hz before it reaches the
- * destination + recorder.
- *
- * Why: the descent's bass region stacks contributions from drone (saw
- * fundamental 65–185 Hz + sine sub 33–93 Hz), chord (3 sines, now at
- * oct 3 after the latest move), and DEEP pad (sine sub at oct 1,
- * 33–62 Hz). Even after the cumulative -55% volume cuts, the *combined*
- * sub-band energy on a single playback system was hitting two failure
- * modes:
- *
- *   1. Laptop speakers can't reproduce <150 Hz cleanly — what reaches
- *      the cone is irregular and reads as "crackle". Worse, any
- *      sub-30 Hz content makes the cone flap audibly without producing
- *      pitch.
- *   2. Subs/headphones reproduce sub content faithfully, including the
- *      sub-30 Hz part that simply has nothing musical in it — just
- *      adds energy that drives the limiter harder without being heard
- *      as bass.
- *
- * 40 Hz is a standard mastering-style cut: well below the lowest
- * musically useful note (E1 ≈ 41 Hz), but above the speaker-cone-flap
- * region. With Q ≈ 0.7 (Butterworth) the slope is gentle enough to
- * not phase-shift the audible bass.
- */
-let masterHpf: Tone.Filter;
+// masterHpf — temporarily removed (see initAudio diagnostic comment).
+// Restore via re-adding declaration + Filter creation if HPF turns out
+// to be exonerated. Keeping the declaration commented (not deleted)
+// makes restoring it a one-line revert.
+// let masterHpf: Tone.Filter;
 let masterDuck: Tone.Gain;
 let masterMix: Tone.Gain;
 let voiceGain: Tone.Gain;
@@ -122,23 +100,36 @@ export async function initAudio(): Promise<void> {
   // Final summing point — feeds destination + recorder.
   masterMix = new Tone.Gain(1).toDestination();
 
-  // Layers route: master → masterHpf → masterDuck → masterMix.
+  // Layers route: master → masterDuck → masterMix.
   //
-  // master is now a static Gain(0.9) — was Tone.Limiter(-1). See the
-  // long comment on the `master` declaration above for the diagnostic
-  // rationale. The 0.9 multiplier gives ~-1 dB headroom (matching the
-  // limiter's old threshold position) via pure attenuation, no
-  // compression. If our signal ever exceeds 1.0 amplitude in the
-  // worst-case stack-up, it'll digitally clip at the destination
-  // rather than getting smoothly limited — but our cumulative volume
-  // cuts have brought peak signal levels well under that ceiling
-  // even with all 9 layer types + 3 pads engaged + reverb at max
-  // depth, so clipping is theoretical not practical.
+  // masterHpf DISCONNECTED for diagnostic. Listener report after the
+  // recorder-disable round: "не важно сколько звуков на сцене, один
+  // drone или 10 разных, редкие потрескивания и клики остаются".
+  // That signature — clicks independent of layer count — means the
+  // cause is in shared infrastructure (master chain) not per-preset
+  // synthesis or per-layer cold-start. Limiter bypass + reverb
+  // disconnect + recorder disable already done. Of what's still in
+  // the master path, the only biquad with internal state is masterHpf.
+  //
+  // Biquad filters maintain z-1, z-2 delay-line state. On signals
+  // with low-amplitude beating (drone's ±25 cent fund/sub/octUp
+  // detune produces ~1-3 Hz amplitude modulation), the filter state
+  // can briefly drift toward denormal floating-point values during
+  // beating troughs. On x86 CPUs denormal arithmetic is up to 100x
+  // slower than normal — audio thread can underrun → click. Rate
+  // would correlate with beating frequency (a few Hz), matching
+  // the "редкие потрескивания" report.
+  //
+  // Without the HPF, subsonic content (<40 Hz) again reaches the
+  // destination. That was a real concern for cone-flap before, but
+  // the listener already confirmed clicks are in the recording too —
+  // so the cause we're chasing is in the digital signal, not the
+  // playback chain. We can re-add subsonic mitigation later via
+  // per-preset HPFs (one-pole, no z-state issue) if the listener
+  // reports cone-flap returning.
   master = new Tone.Gain(0.9);
-  masterHpf = new Tone.Filter({ frequency: 40, type: 'highpass', Q: 0.707 });
   masterDuck = new Tone.Gain(1);
-  master.connect(masterHpf);
-  masterHpf.connect(masterDuck);
+  master.connect(masterDuck);
   masterDuck.connect(masterMix);
 
   // Voice route: voiceGain → masterMix (bypasses duck)
