@@ -412,18 +412,16 @@ function buildDrone(freq: number): PresetBuild {
   osc.start();
   sub.start();
   octUp.start();
-  // Master env target 0.112 (was 0.16) — 30% drop. Per-instance peak math:
+  // Master env target 0.0896 (was 0.16, then 0.112; another -20% pass
+  // brings drone in line with the rest of the mix once pads + lower-peak
+  // chords/bells/drips reduced overall density). Per-instance peak math:
   // saw + sub through unit-gain srcMix can reach ~2.0 before the LP, the
   // filtered branch peaks near unity in the passband, octUp adds another
   // 0.35 — so the env scales an internal signal of ~2.35 down to the
-  // final output amplitude. At 0.16 the per-drone peak was ~0.38; with
-  // 4–5 simultaneous drones in a descent the master limiter (-1 dB,
-  // ~0.89 threshold) was getting hit at 3–4× threshold and clamping
-  // hard enough that fast oscillator-beat transients slipped past its
-  // 5-ms attack and audibly clicked. 0.112 brings per-drone peak down
-  // to ~0.27 and gives the limiter the headroom it needs to ride the
-  // mix smoothly.
-  gain.gain.rampTo(0.112, 4);
+  // final output amplitude. 0.0896 brings per-drone peak to ~0.21,
+  // well clear of the master limiter (-1 dB, ~0.89 threshold) even
+  // with 4–5 drones stacking, so transient slip-through is gone.
+  gain.gain.rampTo(0.0896, 4);
 
   return {
     output: gain,
@@ -524,7 +522,11 @@ function buildPulse(freq: number): PresetBuild {
     sustain: 0.35 + Math.random() * 0.35, // 0.35–0.7
     release: 1.5 + Math.random() * 1.8,   // 1.5–3.3s
   });
-  const gain = new Tone.Gain(0.18);
+  // Out gain 0.144 (was 0.18, -20%). Pulse's repeating attack envelope
+  // means multiple instances can hit on overlapping cycles and stack —
+  // dropping the per-instance peak gives the master limiter room when
+  // 3-4 pulses align.
+  const gain = new Tone.Gain(0.144);
   osc.connect(filter);
   filter.connect(env);
   env.connect(gain);
@@ -720,12 +722,13 @@ function buildBell(freq: number): PresetBuild {
     sustain: 0.0,
     release: 1.2 + Math.random() * 1.0,
   });
-  // Out gain 0.154 (was 0.22, -30%). Bells stand out in the mix because
-  // their decay envelope is longer than most layer types — multiple
-  // overlapping bells stack into a sustained chord-of-bells, and the
-  // 0.22 ceiling pushed the cumulative bell loudness above the
-  // surrounding layers.
-  const out = new Tone.Gain(0.154);
+  // Out gain 0.1232 (was 0.22 → 0.154 → another -20%). Bells stand out
+  // in the mix because their decay envelope is longer than most layer
+  // types — multiple overlapping bells stack into a sustained
+  // chord-of-bells, and the 0.22 ceiling pushed the cumulative bell
+  // loudness above the surrounding layers. Successive cuts bring the
+  // bell tail in line with the rest now that pads are also active.
+  const out = new Tone.Gain(0.1232);
   osc.connect(env);
   harm.connect(harmGain);
   harmGain.connect(env);
@@ -782,12 +785,13 @@ function buildDrip(freq: number): PresetBuild {
     sustain: 0.0,
     release: 0.2 + Math.random() * 0.25,
   });
-  // Out gain 0.196 (was 0.28, -30%). Drip's transient attack puts most
-  // of its energy in a sub-millisecond peak that the ear reads as
-  // "loud" disproportionate to its perceived RMS — the previous 0.28
-  // made dense drip sequences pop above the rest of the mix. 0.196
-  // brings the transient peak down without losing the staccato bite.
-  const out = new Tone.Gain(0.196);
+  // Out gain 0.1568 (was 0.28 → 0.196 → another -20%). Drip's transient
+  // attack puts most of its energy in a sub-millisecond peak that the
+  // ear reads as "loud" disproportionate to its perceived RMS — the
+  // original 0.28 made dense drip sequences pop above the rest of the
+  // mix. Successive cuts pull the transient peak down without losing
+  // the staccato bite.
+  const out = new Tone.Gain(0.1568);
   osc.connect(lp);
   lp.connect(env);
   env.connect(out);
@@ -937,16 +941,15 @@ function buildChord(rootFreq: number): PresetBuild {
   // LFO target; outFinal is a normal AudioParam we ramp down on dispose.
   const outDriven = new Tone.Gain(0);
   lp.connect(outDriven);
-  // Breathe period 16–32 s. Peak 0.07–0.126 (was 0.10–0.18, dropped 30%).
-  // Like buildDrone above, the chord's internal sum (root + 0.45-0.7×fifth
-  // + 0.25-0.55×oct ≈ 2.25 worst case) gets scaled by the LFO peak to
-  // produce per-instance output. At the previous 0.18 cap that was ~0.4
-  // peak per chord, and 4–5 simultaneous chords pushed the master
-  // limiter into hard clamp on transient peaks (audible as crackle).
-  // 0.126 cap brings per-instance peak to ~0.28 and lets the limiter
-  // breathe.
+  // Breathe period 16–32 s. Peak 0.056–0.1008 (was 0.10–0.18 → 0.07–0.126
+  // → another -20% pass). Like buildDrone above, the chord's internal
+  // sum (root + 0.45-0.7×fifth + 0.25-0.55×oct ≈ 2.25 worst case) gets
+  // scaled by the LFO peak to produce per-instance output. At the
+  // previous 0.126 cap per-instance peak was ~0.28; 0.1008 brings it
+  // to ~0.23, so 4–5 stacked chords stay under the master limiter
+  // threshold even on the LFO peaks.
   const breathePeriod = 16 + Math.random() * 16;
-  const breathePeak = 0.07 + Math.random() * 0.056;
+  const breathePeak = 0.056 + Math.random() * 0.0448;
   const breathe = new Tone.LFO({
     frequency: 1 / breathePeriod,
     min: 0,
