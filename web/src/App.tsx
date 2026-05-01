@@ -12,7 +12,8 @@ import {
   fadeOutMaster,
   initAudio,
   setGlobalDepth,
-  startRecording,
+  // startRecording — temporarily commented out (see handleBegin
+  // diagnostic comment). Restore when re-enabling recording.
   stopAllPads,
   stopRecording,
 } from './audio/engine';
@@ -278,8 +279,32 @@ export function App() {
   const handleBegin = async () => {
     if (!agentConnected) return;
     await initAudio();
-    startRecording();
-    setRecording(true);
+    // DIAGNOSTIC: recording disabled for this round.
+    //
+    // Listener's latest report: most clicks on FIRST drone and FIRST
+    // chord, very few/none on subsequent layers. That signature is
+    // cold-start overhead, not a steady-state synthesis issue. The
+    // most likely source of cold-start CPU strain on the audio thread
+    // is MediaRecorder — encoder JIT-compiles the Opus codec, allocates
+    // buffers, and primes its pipeline in the first few seconds. That
+    // spike happens to coincide exactly with the first drone's 4-second
+    // gain ramp toward peak. Audio thread can't keep up → underrun →
+    // click. After the encoder warms up (a few seconds), no more
+    // strain — matching "после нет, или редкие на хвосте drone".
+    //
+    // The click also appears in the recording because MediaRecorder
+    // taps masterMix from the same audio graph; if the audio thread
+    // glitches before signal reaches the recorder's tap, both live
+    // and recorded audio capture the glitch identically.
+    //
+    // Keep recording disabled until the listener confirms whether
+    // clicks are gone. If yes → re-enable with deferred start (5s
+    // setTimeout so encoder warms up while player watches intro
+    // animation). If no → recorder is exonerated and we look at
+    // per-preset oscillator startup (Tone.Oscillator phase init,
+    // biquad filter state initialization, Panner3D HRTF cold-start).
+    // startRecording();
+    // setRecording(true);
     beginLocal();
     bridgeRef.current?.send({ type: 'hello' });
   };
