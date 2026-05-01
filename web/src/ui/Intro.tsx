@@ -262,7 +262,10 @@ function CommandBlock({
         <pre
           style={{
             margin: 0,
-            padding: '12px 16px',
+            // Top padding bumped (12 → 36) so the first line of text
+            // clears the absolutely-positioned COPY button instead of
+            // sliding under it. Side+bottom unchanged.
+            padding: '36px 16px 12px',
             background: 'rgba(255,255,255,0.04)',
             border: '1px solid #2a2a2e',
             borderRadius: 4,
@@ -285,7 +288,10 @@ function CommandBlock({
           style={{
             position: 'absolute',
             top: 6,
-            right: 6,
+            // Pulled in from the right edge (6 → 14) so the button
+            // doesn't sit on top of the vertical scrollbar in
+            // scrollable mode (~14 px scrollbar width on most setups).
+            right: 14,
             padding: '4px 10px',
             fontSize: 9,
             letterSpacing: '0.25em',
