@@ -141,33 +141,32 @@ function PairingPanel({
         width: '100%',
       }}
     >
+      {/* Descent code — single inline line, low-emphasis. The orange
+          accent that used to live here moved onto the four
+          instructional labels below (① / ② / KEEP… / TROUBLESHOOT)
+          where it actually guides the eye through the steps. The
+          code itself is just a reference value the player only needs
+          to copy, so it sits in the same muted style as the section
+          labels. */}
       <div style={{ fontSize: 11, letterSpacing: '0.25em', color: '#6a6660' }}>
-        DESCENT CODE
-      </div>
-      <div
-        style={{
-          fontSize: 28,
-          letterSpacing: '0.4em',
-          fontFamily: 'ui-monospace, Menlo, monospace',
-          color: '#c9885b',
-        }}
-      >
-        {code}
+        DESCENT CODE {code}
       </div>
 
       <CommandBlock
         label="① IN TERMINAL — RUN, ANSWER PROMPTS WITH 'Y'"
+        labelColor="#c9885b"
         body={command}
       />
       <CommandBlock
         label="② IN THE OPENED HERMES CHAT, PASTE THIS AND HIT ENTER"
+        labelColor="#c9885b"
         body={prompt}
       />
       <div
         style={{
           fontSize: 11,
           letterSpacing: '0.2em',
-          color: '#6a6660',
+          color: '#c9885b',
           textAlign: 'center',
           maxWidth: 540,
           lineHeight: 1.7,
@@ -188,7 +187,11 @@ function PairingPanel({
           textAlign: 'left',
         }}
       >
-        <summary style={{ cursor: 'pointer', padding: '4px 0' }}>
+        {/* Summary gets its own color — the orange accent groups it
+            with the other instructional labels above (① / ② / KEEP…),
+            but the body inherits the muted #6a6660 from <details> so
+            the troubleshoot prose stays low-emphasis. */}
+        <summary style={{ cursor: 'pointer', padding: '4px 0', color: '#c9885b' }}>
           NOT WORKING? TROUBLESHOOT ↓
         </summary>
         <div
@@ -227,10 +230,18 @@ function PairingPanel({
 
 function CommandBlock({
   label,
+  labelColor = '#6a6660',
   body,
   scrollable,
 }: {
   label?: string;
+  /**
+   * Color applied to the label text. Defaults to the muted grey used
+   * elsewhere as section-label color; pass `#c9885b` (or another
+   * accent) when this block is one of the player's primary
+   * step-by-step instructions and the eye needs to land on it.
+   */
+  labelColor?: string;
   body: string;
   /**
    * Cap the <pre> at ~320 px with an internal scrollbar instead of
@@ -254,7 +265,7 @@ function CommandBlock({
   return (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 6 }}>
       {label && (
-        <div style={{ fontSize: 11, letterSpacing: '0.2em', color: '#6a6660' }}>
+        <div style={{ fontSize: 11, letterSpacing: '0.2em', color: labelColor }}>
           {label}
         </div>
       )}
