@@ -411,7 +411,10 @@ function buildPulse(freq: number): PresetBuild {
   // Pulse waveform varies — triangle is the soft default, sawtooth gives a
   // more reedy/voicelike pulse, square gives a hollow chiptune-y one. Each
   // session-instance picks one; the player perceives "different pulses".
-  const waveforms: Array<Tone.ToneOscillatorType> = ['triangle', 'sawtooth', 'square'];
+  // `as const` is needed because Tone.Oscillator's options-object overload
+  // overlaps with the partial-oscillator one — without literal narrowing,
+  // tsc can't figure out which overload `type: wave` belongs to.
+  const waveforms = ['triangle', 'sawtooth', 'square'] as const;
   const wave = waveforms[Math.floor(Math.random() * waveforms.length)];
   const osc = new Tone.Oscillator({ frequency: freq, type: wave });
   const env = new Tone.AmplitudeEnvelope({
