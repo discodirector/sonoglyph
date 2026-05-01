@@ -241,22 +241,36 @@ function PadsHint({ visible }: { visible: boolean }) {
     <div
       style={{
         position: 'fixed',
-        // Pads panel geometry (from the panel <div> style above):
+        // Pads panel geometry (from the panel <div> above):
         //   right: 24, bottom: 90, width ≈ 274 px (3 × 86 + 2 × 8),
         //   height ≈ 149 px (10 top-pad + 13 label + 8 gap + 110
-        //   cell + 8 bottom-pad). So:
-        //     panel top-LEFT corner ≈ (right: 298, bottom: 239).
+        //   cell + 8 bottom-pad).
+        //   → panel left edge  : viewport right: 298
+        //   → panel top edge   : viewport bottom: 239
+        //   → panel TOP-LEFT corner: (right: 298, bottom: 239)
         //
-        // Hint anchored at (right: 290, bottom: 230) puts the SVG
-        // arrow tip — at SVG-coords (168, 38) within a 180×50
-        // canvas — at viewport (right: 302, bottom: 242). That's
-        // ~4 px left and ~3 px above the panel's top-left corner,
-        // which reads as "pointing AT the corner" (approaching from
-        // upper-left, stopping just shy) rather than "stabbing
-        // into the middle of the panel" which is what the previous
-        // bottom: 110 produced.
-        right: 290,
-        bottom: 230,
+        // The hint MUST stay fully outside the panel's bounding box
+        // — the panel sits at zIndex 20 and the hint at zIndex 19,
+        // so any overlap puts the SVG behind the panel and the arrow
+        // disappears. Concretely:
+        //   - container's RIGHT edge must be at right ≥ 298 (else
+        //     the right end of the SVG slips behind the panel)
+        //   - container's BOTTOM edge must be at bottom > 239 (else
+        //     the bottom of the SVG slips behind the panel top)
+        //
+        // (right: 320, bottom: 245) gives:
+        //   - container right edge at right: 320 → 22 px LEFT of
+        //     panel left edge (clear)
+        //   - container bottom edge at bottom: 245 → 6 px ABOVE
+        //     panel top (clear)
+        //   - SVG arrow tip at viewport (right: 332, bottom: 257)
+        //     — ~34 px left, ~18 px above the panel's top-left
+        //     corner. Reads as "approaching the top-left corner
+        //     from upper-left, stopping short", which is what we
+        //     want: the eye follows the arrow into the corner
+        //     without the arrow itself overlapping the panel.
+        right: 320,
+        bottom: 245,
         zIndex: 19,
         pointerEvents: 'none',
         opacity: visible ? 1 : 0,
