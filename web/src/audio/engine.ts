@@ -422,24 +422,51 @@ function buildDrone(freq: number): PresetBuild {
   // routes around the filter and joins back at the final env (`gain`).
   const srcMix = new Tone.Gain(1);
 
-  // Cutoff fluctuates session-to-session: 220-450 Hz centre. Lower = more
-  // muffled, higher = more present.
-  const filterCenter = 220 + Math.random() * 230;
+  // Cutoff and Q FIXED — no LFO sweep, no random resonance variation.
+  //
+  // Earlier versions had an LFO sweeping cutoff between (intrinsic 220-450)
+  // + (lfo output 120-450), so total cutoff swept ~340-900 Hz over a
+  // 6.5–40 s period. With Q up to 0.9, the filter had a small (~0.6 dB)
+  // resonance peak right at cutoff. Each LFO cycle dragged that peak
+  // through the fundamental + harmonics, momentarily amplifying whichever
+  // partial sat at cutoff. On top of that, the LFO drove the biquad's
+  // frequency AudioParam at audio rate, forcing per-block coefficient
+  // recompute — a known source of subtle DSP artifacts on lower-end
+  // playback systems.
+  //
+  // After the saw→triangle change made the click WORSE rather than
+  // better (listener report: "drone трещит даже когда один на сцене"),
+  // the most likely remaining culprit is the LFO+filter interaction
+  // itself, not the waveform. Switching to a static filter eliminates:
+  //   - all biquad coefficient recomputation
+  //   - all resonance-at-fundamental crossings
+  //   - all AudioParam audio-rate scheduling
+  //
+  // Cutoff fixed at 500 Hz: well above the fundamental (65–185 Hz at
+  // oct 2) so the body of the triangle passes cleanly, but rolls off
+  // the small upper harmonics by the time they reach the limiter. Q
+  // 0.5 = critically damped, no resonance peak whatsoever (Butterworth
+  // is Q≈0.707; below that the filter is overdamped and has a smoothly
+  // rolling-off passband, no overshoot).
+  //
+  // The drone now has a static timbre. Lost: slow filter "breathing"
+  // motion that gave drone its evolving feel. Gained: a guaranteed-
+  // clean signal path with no modulation artifacts. If this fixes the
+  // click, we add modulation back via gentler means (e.g. slow gain
+  // breathing, or a much narrower LFO at low Q on a dedicated all-
+  // pass filter that won't cross harmonics).
   const filter = new Tone.Filter({
-    frequency: filterCenter,
+    frequency: 500,
     type: 'lowpass',
-    // Q in 0.5..0.9 (was 0.7..1.8). Above 1.0 the filter resonates at
-    // the cutoff; on the swept LFO that meant a moving formant peak rang
-    // through whichever saw harmonic crossed it — the "vocal buzz" the
-    // user heard as noise. Capping below resonance gives a smooth
-    // roll-off instead.
-    Q: 0.5 + Math.random() * 0.4,
+    Q: 0.5,
   });
 
-  // octUp at -9dB relative to saw/sub. Loud enough to be heard on any
-  // playback (laptop speakers can reach 66+ Hz), quiet enough that the
-  // saw + sub pair stays the dominant identity of the voice.
-  const octUpAtten = new Tone.Gain(0.35);
+  // octUp gain reduced 0.35 → 0.25. With the filter no longer "closing"
+  // periodically, octUp doesn't need to provide constant body any more —
+  // the main filter branch is always passing the fundamental + harmonics.
+  // Lowering octUp shifts drone's perceived register slightly down (less
+  // mid-band emphasis) and removes one more potential transient source.
+  const octUpAtten = new Tone.Gain(0.25);
 
   // Master env. Also acts as the summing point where the filtered
   // (saw+sub) branch and the unfiltered (octUp) branch merge.
@@ -454,39 +481,20 @@ function buildDrone(freq: number): PresetBuild {
   octUp.connect(octUpAtten);
   octUpAtten.connect(gain);
 
-  // LFO period 6.5–40s. lfoMax narrowed further: was 400–800, now
-  // 250–450 Hz. With the fundamental switched from saw to triangle,
-  // upper-harmonic content is tiny (3rd at 1/9, 5th at 1/25), so the
-  // filter doesn't need a wide sweep to be perceptible — the LFO is
-  // mostly modulating the low-order partials that ride the body of
-  // the wave. Narrower sweep also means less per-sample biquad
-  // coefficient recomputation, which is gentler on the audio thread
-  // on lower-end machines (a separate but compounding source of
-  // peak-time artifacts).
-  const lfoMin = 120 + Math.random() * 160;
-  const lfoMax = 250 + Math.random() * 200;
-  const lfo = new Tone.LFO({
-    frequency: 0.025 + Math.random() * 0.13,
-    min: lfoMin,
-    max: lfoMax,
-    type: 'sine',
-  }).start();
-  lfo.connect(filter.frequency);
-
   osc.start();
   sub.start();
   octUp.start();
-  // Master env target 0.07168 (cumulative cuts: 0.16 → 0.112 → 0.0896 →
-  // 0.07168). Drone is the densest single voice in the mix (saw + sub
-  // + octUp through a moving filter, ~5-second attack), and successive
-  // listener feedback kept reporting it as too loud relative to other
-  // layers and the new pads. Per-instance peak math: saw + sub through
-  // unit-gain srcMix can reach ~2.0 before the LP, the filtered branch
-  // peaks near unity in the passband, octUp adds another 0.35 — so the
-  // env scales an internal signal of ~2.35 down. 0.07168 brings
-  // per-drone peak to ~0.17, leaving the limiter completely untouched
-  // even with 5 drones stacked.
-  gain.gain.rampTo(0.07168, 4);
+  // Master env target 0.055 (cumulative cuts: 0.16 → 0.112 → 0.0896 →
+  // 0.07168 → 0.055). Drone is the densest single voice in the mix,
+  // and successive listener feedback kept reporting it as too loud +
+  // crackling on peaks. The latest cut accompanies the LFO removal:
+  // we sacrifice some presence here so even if the click turns out
+  // to be a system-level artifact (audio thread jitter, driver
+  // glitch), the absolute level is low enough that it'd be hard to
+  // hear. Per-instance peak math with triangle fund + sub + octUp:
+  // ~1.4 internal worst case × 0.055 = 0.077 instantaneous, well
+  // clear of the limiter even with 5 drones stacked.
+  gain.gain.rampTo(0.055, 4);
 
   return {
     output: gain,
@@ -503,7 +511,6 @@ function buildDrone(freq: number): PresetBuild {
           filter.dispose();
           octUpAtten.dispose();
           gain.dispose();
-          lfo.stop().dispose();
         } catch {
           /* already disposed */
         }
