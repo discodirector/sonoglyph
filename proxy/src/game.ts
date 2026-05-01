@@ -127,6 +127,9 @@ export class GameSession {
       rootName: this.scale.rootName,
       modeName: this.scale.modeName,
       feel: this.scale.feel,
+      // Slice so a client mutating the array can't reach back through the
+      // wire shape into our authoritative scale (it can't, but defensive).
+      intervals: this.scale.intervals.slice(),
     };
   }
 

@@ -76,17 +76,23 @@ export type CurrentTurn = 'player' | 'agent';
 
 /**
  * Wire-format view of the descent's musical key. The full {@link SessionScale}
- * type lives in `theory.ts` and carries the interval table + ScaleMode enum
- * — those are bridge internals. Clients only see the display strings + the
- * pitch class so they can do their own UI math if needed.
+ * type lives in `theory.ts` and carries the ScaleMode enum — that's a bridge
+ * internal. Clients see the display strings + pitch class + interval table
+ * so they can build their own chord tones (the Pads UI in the web client
+ * needs intervals to derive its 3-pad palette in the session's key).
  */
 export interface SessionScalePublic {
-  /** Pitch class 0..11 (0=C). Useful if a client wants to do its own math. */
+  /** Pitch class 0..11 (0=C). */
   rootPc: number;
   rootName: string;   // 'F#'
   modeName: string;   // 'Phrygian'
   /** One-line "feel" — same string used in the agent's instructions. */
   feel: string;
+  /**
+   * Semitone offsets from the root, ascending. e.g. natural minor = `[0,2,3,5,7,8,10]`.
+   * Mirrors `SessionScale.intervals` — see theory.ts for the full table.
+   */
+  intervals: number[];
 }
 
 export interface GameStateSnapshot {

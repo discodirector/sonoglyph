@@ -23,6 +23,7 @@ import {
   type GameStateSnapshot,
   type LayerType,
   type PlacedLayer,
+  type SessionScalePublic,
   MAX_LAYERS,
 } from '../net/protocol';
 
@@ -39,6 +40,24 @@ export const LAYER_TYPES: LayerType[] = [
   'swell',
   'chord',
 ];
+
+// ---------------------------------------------------------------------------
+// Pads — atmospheric "air" voices that play in parallel to the placed-layer
+// composition. Three timbral shades, each derived from the session's scale
+// (so two players in different keys hear pads in their own tonality).
+//
+// Pads aren't part of the turn-based layer game and aren't broadcast over WS
+// — they're a purely client-side ambient layer. They DO ride the master mix
+// + recorder, so whatever's on at the end of the descent gets baked into
+// the WebM that's pinned to IPFS and minted on-chain.
+// ---------------------------------------------------------------------------
+export type PadId = 'glow' | 'air' | 'deep';
+export const PAD_IDS: PadId[] = ['glow', 'air', 'deep'];
+export const PAD_LABELS: Record<PadId, string> = {
+  glow: 'GLOW',
+  air: 'AIR',
+  deep: 'DEEP',
+};
 
 // ---------------------------------------------------------------------------
 // Local event log — feeds spectral context for the journal in case we
@@ -86,6 +105,13 @@ interface SessionState {
   agentConnected: boolean;
   pairing: PairingInfo | null;
   artifact: FinalArtifact | null;
+  /**
+   * Descent's musical key — picked once on the bridge in `pickSessionScale()`,
+   * arrives in the first `state` snapshot. The Pads UI uses
+   * `scale.intervals` to derive its 3-pad palette in the session's tonality.
+   * Null until the first snapshot lands.
+   */
+  scale: SessionScalePublic | null;
 
   // --- client-owned ---
   depth: number;
@@ -93,6 +119,12 @@ interface SessionState {
   /** Per-type mix gains (0..1.5). 1.0 = unity. Mirrored in audio engine
    *  via setLayerVolume; the UI EQ panel reads + writes here. */
   layerVolumes: Record<LayerType, number>;
+  /**
+   * Which atmospheric pads are currently engaged. Each id maps to a pad
+   * voice the engine starts/stops in response. Persists across the
+   * Pads-panel toggle so opening the panel doesn't reset state.
+   */
+  padsActive: Record<PadId, boolean>;
   proxyOk: boolean | null;
   recording: boolean;
   /** Captured WebM of the full descent. Set once Tone.Recorder stops at
@@ -137,6 +169,8 @@ interface SessionState {
   setDepth: (d: number) => void;
   setSelectedPreset: (t: LayerType) => void;
   setLayerVolume: (t: LayerType, value: number) => void;
+  /** Toggle a pad on/off. Engine-side start/stop is wired in the Pads UI. */
+  setPadActive: (id: PadId, on: boolean) => void;
   setProxyOk: (ok: boolean) => void;
   setRecording: (r: boolean) => void;
   setRecordingBlob: (b: Blob | null) => void;
@@ -164,12 +198,17 @@ export const useSession = create<SessionState>((set) => ({
   agentConnected: false,
   pairing: null,
   artifact: null,
+  scale: null,
 
   depth: 0,
   selectedPreset: 'drone',
   layerVolumes: Object.fromEntries(LAYER_TYPES.map((t) => [t, 1])) as Record<
     LayerType,
     number
+  >,
+  padsActive: Object.fromEntries(PAD_IDS.map((id) => [id, false])) as Record<
+    PadId,
+    boolean
   >,
   proxyOk: null,
   recording: false,
@@ -206,6 +245,7 @@ export const useSession = create<SessionState>((set) => ({
         currentTurn: s.currentTurn,
         cooldownEndsAt: s.cooldownEndsAt,
         agentConnected: s.agentConnected,
+        scale: s.scale,
       };
       if (s.phase === 'finished') next.phase = 'finished';
       return next;
@@ -249,6 +289,8 @@ export const useSession = create<SessionState>((set) => ({
   setSelectedPreset: (t) => set({ selectedPreset: t }),
   setLayerVolume: (t, value) =>
     set((s) => ({ layerVolumes: { ...s.layerVolumes, [t]: value } })),
+  setPadActive: (id, on) =>
+    set((s) => ({ padsActive: { ...s.padsActive, [id]: on } })),
   setProxyOk: (ok) => set({ proxyOk: ok }),
   setRecording: (r) => set({ recording: r }),
   setRecordingBlob: (b) => set({ recordingBlob: b }),

@@ -23,7 +23,8 @@
  */
 
 import * as Tone from 'tone';
-import { LAYER_TYPES, type LayerType } from '../state/useSession';
+import { LAYER_TYPES, type LayerType, type PadId } from '../state/useSession';
+import type { SessionScalePublic } from '../net/protocol';
 
 // -----------------------------------------------------------------------------
 // Module state — initialized once, after first user gesture.
@@ -45,6 +46,17 @@ let recorder: Tone.Recorder | null = null;
 // session store mirrors these gains so the UI can drive them; on init we
 // re-apply whatever the user had set.
 const typeBuses: Map<LayerType, Tone.Gain> = new Map();
+
+// Pad bus — sister to typeBuses but for the atmospheric pads. All three
+// pad voices share one bus so the player perceives them as a single
+// "atmosphere" track. Connects to master + reverbSend like the per-type
+// buses, so pads ride the same cathedral reverb. Default 0.7 gain — well
+// below unity so pads sit *under* the placed-layer composition.
+let padBus: Tone.Gain;
+// Live pad voices keyed by PadId. Each value is a dispose function that
+// fades the voice out and tears down its nodes; absent entry = pad is off.
+type PadDispose = () => void;
+const padHandles: Map<PadId, PadDispose> = new Map();
 
 export async function initAudio(): Promise<void> {
   if (initialized) return;
@@ -81,6 +93,14 @@ export async function initAudio(): Promise<void> {
     bus.connect(reverbSend);
     typeBuses.set(type, bus);
   }
+
+  // Pads bus — single shared bus for all three atmospheric pad voices.
+  // Default 0.7 so pads can't outweigh the placed-layer composition; the
+  // perceived "pads volume" comes from how many pads are simultaneously
+  // engaged + the pads' own internal envelopes, not from a UI fader.
+  padBus = new Tone.Gain(0.7);
+  padBus.connect(master);
+  padBus.connect(reverbSend);
 
   analyzer = new Tone.Analyser('fft', 64);
   master.connect(analyzer); // pre-duck, pre-voice — measures layers only
@@ -940,6 +960,376 @@ function buildPreset(type: LayerType, freq: number): PresetBuild {
       return buildSwell(freq);
     case 'chord':
       return buildChord(freq);
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Pads — three atmospheric voices, each derived from the session's scale.
+//
+// Pads aren't placed in the world; they're a separate "air" track the player
+// can engage as background. All three route through `padBus` (initialized
+// alongside the per-type buses in initAudio), which is wired to master +
+// reverbSend so pads ride the cathedral reverb like everything else.
+//
+// Pads share the descent's tonal centre (rootPc) and pull harmony notes from
+// the scale's `intervals` array. We pick "the scale's third / fifth / etc."
+// dynamically — Phrygian gives us a minor third, Lydian a sharp fourth, and
+// pentatonics fall back gracefully when an interval is absent. Two players
+// in different keys hear different pad chords.
+//
+// Voice envelopes sustain indefinitely while the pad is engaged. Start ramps
+// in over ~4 s, stop ramps out over ~3 s and disposes nodes after the tail.
+// -----------------------------------------------------------------------------
+
+/**
+ * Convert (octave, semitone-from-root) → Hz using the descent's root pitch
+ * class. Same MIDI math as `freqAt` in proxy/src/theory.ts — kept local so
+ * the engine doesn't need to import from theory (which lives in proxy/).
+ */
+function padFreq(scale: SessionScalePublic, octave: number, semitone: number): number {
+  const midi = 12 * (octave + 1) + scale.rootPc + semitone;
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+/**
+ * Find the first matching semitone in the scale, with fallbacks. e.g.
+ * `pickInterval(scale, 3, 4)` returns minor third if present, else major
+ * third, else null. Returning null lets callers omit a voice rather than
+ * forcing an unscale-tone.
+ */
+function pickInterval(
+  scale: SessionScalePublic,
+  ...candidates: number[]
+): number | null {
+  for (const c of candidates) {
+    if (scale.intervals.includes(c)) return c;
+  }
+  return null;
+}
+
+interface PadVoiceBuild {
+  output: Tone.ToneAudioNode;
+  oscillators: Tone.Oscillator[];
+  extras: { dispose: () => void }[];
+}
+
+/**
+ * GLOW — warm mid-range triad. Saw-stack on root + third + fifth at oct 3,
+ * sine sub at oct 2 for body. LP cutoff sweeps slowly between 350 and
+ * 1100 Hz — keeps the timbre breathing without ever opening up too far.
+ *
+ * Identity: this is the "centred" pad — present, harmonically complete,
+ * fills the mid spectrum. Use alone for a held chord, or combine with AIR
+ * for shimmer or DEEP for foundation.
+ */
+function buildPadGlow(scale: SessionScalePublic): PadVoiceBuild {
+  const third = pickInterval(scale, 3, 4); // minor or major third
+  const fifth = pickInterval(scale, 7, 6, 8) ?? 7; // perfect / dim / aug
+  const rootHz = padFreq(scale, 3, 0);
+  const subHz = padFreq(scale, 2, 0);
+
+  const sum = new Tone.Gain(1);
+  const oscs: Tone.Oscillator[] = [];
+  const extras: { dispose: () => void }[] = [];
+
+  // Saw root with subtle detune (chorus warmth on a single voice).
+  const sawRoot = new Tone.Oscillator({
+    frequency: rootHz,
+    type: 'sawtooth',
+    detune: -6 + Math.random() * 4,
+  });
+  sawRoot.connect(sum);
+  oscs.push(sawRoot);
+
+  // Saw third — gain attenuated so the third doesn't dominate over root.
+  if (third !== null) {
+    const sawThird = new Tone.Oscillator({
+      frequency: padFreq(scale, 3, third),
+      type: 'sawtooth',
+      detune: -3 + Math.random() * 6,
+    });
+    const thirdGain = new Tone.Gain(0.55);
+    sawThird.connect(thirdGain);
+    thirdGain.connect(sum);
+    oscs.push(sawThird);
+    extras.push(thirdGain);
+  }
+
+  // Saw fifth.
+  const sawFifth = new Tone.Oscillator({
+    frequency: padFreq(scale, 3, fifth),
+    type: 'sawtooth',
+    detune: 3 + Math.random() * 4,
+  });
+  const fifthGain = new Tone.Gain(0.55);
+  sawFifth.connect(fifthGain);
+  fifthGain.connect(sum);
+  oscs.push(sawFifth);
+  extras.push(fifthGain);
+
+  // Sine sub one octave below root — body the laptop speakers can't quite
+  // reach but headphones / decent speakers feel as foundation.
+  const sineSub = new Tone.Oscillator({ frequency: subHz, type: 'sine' });
+  const subGain = new Tone.Gain(0.45);
+  sineSub.connect(subGain);
+  subGain.connect(sum);
+  oscs.push(sineSub);
+  extras.push(subGain);
+
+  // Slow LP sweep. Q stays below resonance — pad is supposed to be
+  // featureless background, no formant ringing.
+  const filter = new Tone.Filter({
+    frequency: 600,
+    type: 'lowpass',
+    Q: 0.6 + Math.random() * 0.2,
+  });
+  sum.connect(filter);
+  extras.push(sum, filter);
+
+  // 14–26 s LFO period. min 350, max 1100 — narrower than buildDrone's
+  // sweep so the pad reads as steady atmosphere, not a moving texture.
+  const lfo = new Tone.LFO({
+    frequency: 1 / (14 + Math.random() * 12),
+    min: 350,
+    max: 1100,
+    type: 'sine',
+  }).start();
+  lfo.connect(filter.frequency);
+  extras.push({ dispose: () => lfo.stop().dispose() });
+
+  return { output: filter, oscillators: oscs, extras };
+}
+
+/**
+ * AIR — high-register shimmer. Triangles + sine on root + fifth + ninth at
+ * oct 4–5. No third (open quartal-ish quality). Subtle vibrato keeps the
+ * upper harmonics alive without straying off-pitch.
+ *
+ * Identity: this is the "ceiling" pad — light, breathy, sits above the
+ * placed layers. Pairs naturally with GLOW (which fills the middle) or
+ * DEEP (where the contrast feels like sky over earth).
+ */
+function buildPadAir(scale: SessionScalePublic): PadVoiceBuild {
+  const fifth = pickInterval(scale, 7, 6, 8) ?? 7;
+  // Ninth = root of next octave + 2 semitones (i.e. semitone 14 in
+  // absolute terms). Will use octave 5 directly with semitone 2 if
+  // available in scale, else fall back to root+12 (octave doubling).
+  const second = pickInterval(scale, 2, 1, 3); // 2nd, ♭2, or ♭3 fallback
+  const rootHi = padFreq(scale, 4, 0);
+  const fifthHi = padFreq(scale, 4, fifth);
+  // "Ninth" voice — semitone 2 of octave 5 if scale has a 2nd, else
+  // an octave-doubled root (still consonant).
+  const ninthHz = second !== null ? padFreq(scale, 5, second) : padFreq(scale, 5, 0);
+
+  const sum = new Tone.Gain(1);
+  const oscs: Tone.Oscillator[] = [];
+  const extras: { dispose: () => void }[] = [];
+
+  // Triangle root — soft, harmonically gentle.
+  const triRoot = new Tone.Oscillator({
+    frequency: rootHi,
+    type: 'triangle',
+    detune: -4 + Math.random() * 8,
+  });
+  triRoot.connect(sum);
+  oscs.push(triRoot);
+
+  // Triangle fifth.
+  const triFifth = new Tone.Oscillator({
+    frequency: fifthHi,
+    type: 'triangle',
+    detune: -2 + Math.random() * 6,
+  });
+  const fifthG = new Tone.Gain(0.55);
+  triFifth.connect(fifthG);
+  fifthG.connect(sum);
+  oscs.push(triFifth);
+  extras.push(fifthG);
+
+  // Sine ninth (or octave-doubled root) — quietest of the stack, just a
+  // shimmer on top.
+  const sineNinth = new Tone.Oscillator({ frequency: ninthHz, type: 'sine' });
+  const ninthG = new Tone.Gain(0.32);
+  sineNinth.connect(ninthG);
+  ninthG.connect(sum);
+  oscs.push(sineNinth);
+  extras.push(ninthG);
+
+  // Subtle vibrato — fast LFO, narrow depth on the root frequency. Adds
+  // life without sounding like seasick chorusing.
+  const vibrato = new Tone.LFO({
+    frequency: 4.5 + Math.random() * 1.5,
+    min: -8,
+    max: 8,
+    type: 'sine',
+  }).start();
+  vibrato.connect(triRoot.detune);
+  extras.push({ dispose: () => vibrato.stop().dispose() });
+
+  // Higher LP cutoff — air pad is supposed to be present in the upper mids.
+  const filter = new Tone.Filter({
+    frequency: 2400,
+    type: 'lowpass',
+    Q: 0.5 + Math.random() * 0.2,
+  });
+  sum.connect(filter);
+  extras.push(sum, filter);
+
+  // Slow filter LFO — wider sweep than GLOW so AIR shimmers more.
+  const sweep = new Tone.LFO({
+    frequency: 1 / (10 + Math.random() * 10),
+    min: 1500,
+    max: 3500,
+    type: 'sine',
+  }).start();
+  sweep.connect(filter.frequency);
+  extras.push({ dispose: () => sweep.stop().dispose() });
+
+  return { output: filter, oscillators: oscs, extras };
+}
+
+/**
+ * DEEP — sub-foundation drone. Sine sub at oct 1 + saw root at oct 2 +
+ * saw fifth at oct 2. Heavily filtered (LP 200–600 Hz) so it reads as
+ * "underground room tone" rather than a melodic line.
+ *
+ * Identity: this is the "floor" pad — sub-bass body the placed-layer
+ * drone can't always provide on its own, plus a quiet fifth for harmonic
+ * grounding. On laptop speakers DEEP barely registers; on headphones or
+ * subs it transforms the whole mix into something cinematic.
+ */
+function buildPadDeep(scale: SessionScalePublic): PadVoiceBuild {
+  const fifth = pickInterval(scale, 7, 6, 8) ?? 7;
+  const subHz = padFreq(scale, 1, 0);
+  const rootLow = padFreq(scale, 2, 0);
+  const fifthLow = padFreq(scale, 2, fifth);
+
+  const sum = new Tone.Gain(1);
+  const oscs: Tone.Oscillator[] = [];
+  const extras: { dispose: () => void }[] = [];
+
+  // Sine sub — primary body. Loudest of the three voices.
+  const sineSub = new Tone.Oscillator({ frequency: subHz, type: 'sine' });
+  sineSub.connect(sum);
+  oscs.push(sineSub);
+
+  // Saw root one octave above the sub. Detuned slightly so two playthroughs
+  // of the same scale don't sound identical.
+  const sawRoot = new Tone.Oscillator({
+    frequency: rootLow,
+    type: 'sawtooth',
+    detune: -8 + Math.random() * 6,
+  });
+  const rootG = new Tone.Gain(0.5);
+  sawRoot.connect(rootG);
+  rootG.connect(sum);
+  oscs.push(sawRoot);
+  extras.push(rootG);
+
+  // Saw fifth — quiet harmonic grounding.
+  const sawFifth = new Tone.Oscillator({
+    frequency: fifthLow,
+    type: 'sawtooth',
+    detune: 4 + Math.random() * 6,
+  });
+  const fifthG = new Tone.Gain(0.32);
+  sawFifth.connect(fifthG);
+  fifthG.connect(sum);
+  oscs.push(sawFifth);
+  extras.push(fifthG);
+
+  // Heavy LP — DEEP is supposed to be felt, not heard distinctly. Cutoff
+  // ~250 Hz centre, sweep 200–600. Above 600 the saw harmonics start to
+  // push the pad into "low drone" territory and lose the cave-floor feel.
+  const filter = new Tone.Filter({
+    frequency: 320,
+    type: 'lowpass',
+    Q: 0.55 + Math.random() * 0.25,
+  });
+  sum.connect(filter);
+  extras.push(sum, filter);
+
+  // Very slow LFO — 22–40 s period. DEEP barely moves; that's the point.
+  const lfo = new Tone.LFO({
+    frequency: 1 / (22 + Math.random() * 18),
+    min: 200,
+    max: 600,
+    type: 'sine',
+  }).start();
+  lfo.connect(filter.frequency);
+  extras.push({ dispose: () => lfo.stop().dispose() });
+
+  return { output: filter, oscillators: oscs, extras };
+}
+
+function buildPadVoice(id: PadId, scale: SessionScalePublic): PadVoiceBuild {
+  switch (id) {
+    case 'glow':
+      return buildPadGlow(scale);
+    case 'air':
+      return buildPadAir(scale);
+    case 'deep':
+      return buildPadDeep(scale);
+  }
+}
+
+/** Per-pad envelope peak. Tuned so 1 pad ≈ tasteful, all 3 ≈ full but
+ *  still under the placed-layer mix. Sum of peaks (0.16+0.13+0.18 = 0.47)
+ *  × padBus 0.7 ≈ 0.33 peak into master before limiter — leaves headroom. */
+const PAD_PEAK: Record<PadId, number> = {
+  glow: 0.16,
+  air: 0.13,
+  deep: 0.18,
+};
+
+/**
+ * Engage a pad voice. No-op if the pad is already engaged or if `scale`
+ * is null (snapshot hasn't arrived yet — the UI guards this anyway).
+ */
+export function startPad(id: PadId, scale: SessionScalePublic): void {
+  if (!initialized) return;
+  if (padHandles.has(id)) return;
+
+  const voice = buildPadVoice(id, scale);
+  // Slow attack envelope — pad is supposed to materialise, not punch in.
+  const env = new Tone.Gain(0);
+  voice.output.connect(env);
+  env.connect(padBus);
+
+  for (const o of voice.oscillators) o.start();
+  // Attack 4 s — typical for pad voices, well within the "0.5–4 sec" range
+  // the brief specifies.
+  env.gain.rampTo(PAD_PEAK[id], 4);
+
+  padHandles.set(id, () => {
+    env.gain.cancelScheduledValues(Tone.now());
+    env.gain.rampTo(0, 3);
+    window.setTimeout(() => {
+      try {
+        for (const o of voice.oscillators) o.stop().dispose();
+        for (const e of voice.extras) e.dispose();
+        env.dispose();
+      } catch {
+        /* already disposed */
+      }
+    }, 3200);
+  });
+}
+
+/** Disengage a pad voice. No-op if it isn't engaged. */
+export function stopPad(id: PadId): void {
+  const dispose = padHandles.get(id);
+  if (!dispose) return;
+  padHandles.delete(id);
+  dispose();
+}
+
+/** Stop every active pad — used when the descent ends so we don't leak
+ *  voices past `phase === 'finished'` (audible damage is nil because the
+ *  outro fade is already silencing masterMix, but it cleans up CPU). */
+export function stopAllPads(): void {
+  for (const id of Array.from(padHandles.keys())) {
+    stopPad(id);
   }
 }
 

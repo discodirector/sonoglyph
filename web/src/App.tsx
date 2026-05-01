@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Scene } from './scene/Scene';
 import { Hud } from './ui/Hud';
 import { Mixer } from './ui/Mixer';
+import { Pads } from './ui/Pads';
 import { Intro } from './ui/Intro';
 import { Finale } from './ui/Finale';
 import { LAYER_TYPES, useSession } from './state/useSession';
@@ -12,6 +13,7 @@ import {
   initAudio,
   setGlobalDepth,
   startRecording,
+  stopAllPads,
   stopRecording,
 } from './audio/engine';
 import { openBridge, pinAudio, type BridgeConnection } from './net/client';
@@ -137,6 +139,11 @@ export function App() {
       const blob = await stopRecording();
       if (blob) setRecordingBlob(blob);
       setRecording(false);
+      // Active pads have already been silenced by the masterMix fade;
+      // dispose them now so we don't keep oscillator graphs running into
+      // the Finale screen for no audible benefit. Safe to call even
+      // when no pads are engaged — `stopAllPads` is a no-op then.
+      stopAllPads();
     }, 10_000);
 
     return () => window.clearTimeout(timer);
@@ -283,6 +290,7 @@ export function App() {
       {phase === 'intro' && <Intro onBegin={handleBegin} />}
       {phase === 'playing' && <Hud />}
       {phase === 'playing' && <Mixer />}
+      {phase === 'playing' && <Pads />}
       {phase === 'finished' && <Finale />}
     </>
   );

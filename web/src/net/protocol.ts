@@ -49,6 +49,11 @@ export interface SessionScalePublic {
   rootName: string;   // 'F#'
   modeName: string;   // 'Phrygian'
   feel: string;
+  /**
+   * Semitone offsets from the root, ascending. e.g. natural minor = `[0,2,3,5,7,8,10]`.
+   * The Pads UI uses these to derive its 3-pad palette in the session's key.
+   */
+  intervals: number[];
 }
 
 export interface GameStateSnapshot {
