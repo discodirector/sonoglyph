@@ -330,33 +330,22 @@ function buildDrone(freq: number): PresetBuild {
   // the same descent don't lock onto identical phase.
   const detune = (Math.random() - 0.5) * 50;
   const osc = new Tone.Oscillator({ frequency: freq, type: 'sawtooth', detune });
-  // Sub voice. Originally always one octave below the fundamental, but
-  // drone fundamentals span 33–92 Hz, so freq/2 lands at 16–46 Hz —
-  // below the ~20 Hz pitch-perception threshold for low-key drones, and
-  // below most playback systems' clean reproduction range. The ear
-  // resolves a 16 Hz sine as ~16 discrete clicks per second, and even
-  // proper subwoofers struggle below ~25 Hz: the cone tries to track
-  // a wave it can't reproduce and flaps irregularly. That intermittent
-  // click was the residual drone crackle remaining after we cut the
-  // master limiter peaks.
-  //
-  // Fix: floor the sub at 30 Hz. When the natural sub-octave would
-  // fall below that, fall back to unison with the fundamental — a
-  // sine doubling that thickens the saw's fundamental without
-  // introducing any subsonic content. Above 30 Hz we keep the true
-  // sub-octave for the deep anchor on systems that can render it.
-  // Net effect: roughly half the drones (those in low keys + low
-  // degrees) lose the octave-down voice in favour of a unison
-  // thickener; the rest are unchanged.
+  // Sub voice — one octave below the fundamental. With drone now at
+  // oct 2 (fundamental 65–185 Hz, see proxy/src/theory.ts), the sub
+  // lands at 33–93 Hz which is cleanly reproducible on most playback
+  // systems. The 30 Hz floor below is defensive — it kicks in only
+  // if drone is ever moved back to a lower octave; at oct 2 freq/2
+  // is always ≥33 Hz so the floor's ternary always falls through to
+  // the true sub-octave.
   const subFreq = freq / 2 < 30 ? freq : freq / 2;
   const sub = new Tone.Oscillator({ frequency: subFreq, type: 'sine' });
   // Octave-up triangle voice — bypasses the LP filter so it provides
-  // constant audible body even when the LFO closes the cutoff. With
-  // drone fundamental at 33–93 Hz, laptop speakers (which roll off below
-  // ~150 Hz) can't reproduce the saw fundamental at all; without this
-  // voice you'd hear only the swept saw harmonics, which read as "noisy
-  // buzz with no body". Triangle's 1/n² harmonic falloff keeps it gentle
-  // even unfiltered.
+  // constant audible body even when the LFO closes the cutoff. The
+  // saw fundamental sits at 65–185 Hz now (drone moved from oct 1 to
+  // oct 2; see proxy/src/theory.ts for why), so it's reproducible on
+  // most playback systems — but octUp at 130–370 Hz still adds a clean
+  // mid-band presence that the LFO can't sweep away. Triangle's 1/n²
+  // harmonic falloff keeps it gentle even unfiltered.
   const octUp = new Tone.Oscillator({ frequency: freq * 2, type: 'triangle' });
 
   // Sources: saw + sub merge here, then go through the swept LP. octUp
@@ -412,16 +401,17 @@ function buildDrone(freq: number): PresetBuild {
   osc.start();
   sub.start();
   octUp.start();
-  // Master env target 0.0896 (was 0.16, then 0.112; another -20% pass
-  // brings drone in line with the rest of the mix once pads + lower-peak
-  // chords/bells/drips reduced overall density). Per-instance peak math:
-  // saw + sub through unit-gain srcMix can reach ~2.0 before the LP, the
-  // filtered branch peaks near unity in the passband, octUp adds another
-  // 0.35 — so the env scales an internal signal of ~2.35 down to the
-  // final output amplitude. 0.0896 brings per-drone peak to ~0.21,
-  // well clear of the master limiter (-1 dB, ~0.89 threshold) even
-  // with 4–5 drones stacking, so transient slip-through is gone.
-  gain.gain.rampTo(0.0896, 4);
+  // Master env target 0.07168 (cumulative cuts: 0.16 → 0.112 → 0.0896 →
+  // 0.07168). Drone is the densest single voice in the mix (saw + sub
+  // + octUp through a moving filter, ~5-second attack), and successive
+  // listener feedback kept reporting it as too loud relative to other
+  // layers and the new pads. Per-instance peak math: saw + sub through
+  // unit-gain srcMix can reach ~2.0 before the LP, the filtered branch
+  // peaks near unity in the passband, octUp adds another 0.35 — so the
+  // env scales an internal signal of ~2.35 down. 0.07168 brings
+  // per-drone peak to ~0.17, leaving the limiter completely untouched
+  // even with 5 drones stacked.
+  gain.gain.rampTo(0.07168, 4);
 
   return {
     output: gain,
@@ -522,11 +512,12 @@ function buildPulse(freq: number): PresetBuild {
     sustain: 0.35 + Math.random() * 0.35, // 0.35–0.7
     release: 1.5 + Math.random() * 1.8,   // 1.5–3.3s
   });
-  // Out gain 0.144 (was 0.18, -20%). Pulse's repeating attack envelope
-  // means multiple instances can hit on overlapping cycles and stack —
-  // dropping the per-instance peak gives the master limiter room when
-  // 3-4 pulses align.
-  const gain = new Tone.Gain(0.144);
+  // Out gain 0.1152 (cumulative: 0.18 → 0.144 → 0.1152). Pulse's
+  // repeating attack envelope means multiple instances can hit on
+  // overlapping cycles and stack — dropping the per-instance peak
+  // gives the master limiter room when 3-4 pulses align, and
+  // continued listener feedback flagged pulse as still too prominent.
+  const gain = new Tone.Gain(0.1152);
   osc.connect(filter);
   filter.connect(env);
   env.connect(gain);
@@ -722,13 +713,13 @@ function buildBell(freq: number): PresetBuild {
     sustain: 0.0,
     release: 1.2 + Math.random() * 1.0,
   });
-  // Out gain 0.1232 (was 0.22 → 0.154 → another -20%). Bells stand out
-  // in the mix because their decay envelope is longer than most layer
-  // types — multiple overlapping bells stack into a sustained
-  // chord-of-bells, and the 0.22 ceiling pushed the cumulative bell
-  // loudness above the surrounding layers. Successive cuts bring the
-  // bell tail in line with the rest now that pads are also active.
-  const out = new Tone.Gain(0.1232);
+  // Out gain 0.09856 (cumulative: 0.22 → 0.154 → 0.1232 → 0.09856).
+  // Bells stand out in the mix because their decay envelope is longer
+  // than most layer types — multiple overlapping bells stack into a
+  // sustained chord-of-bells, and the original 0.22 ceiling pushed the
+  // cumulative bell loudness above the surrounding layers. Successive
+  // cuts bring the bell tail in line with pads + cut drone/chord/etc.
+  const out = new Tone.Gain(0.09856);
   osc.connect(env);
   harm.connect(harmGain);
   harmGain.connect(env);
@@ -785,13 +776,13 @@ function buildDrip(freq: number): PresetBuild {
     sustain: 0.0,
     release: 0.2 + Math.random() * 0.25,
   });
-  // Out gain 0.1568 (was 0.28 → 0.196 → another -20%). Drip's transient
-  // attack puts most of its energy in a sub-millisecond peak that the
-  // ear reads as "loud" disproportionate to its perceived RMS — the
-  // original 0.28 made dense drip sequences pop above the rest of the
-  // mix. Successive cuts pull the transient peak down without losing
-  // the staccato bite.
-  const out = new Tone.Gain(0.1568);
+  // Out gain 0.12544 (cumulative: 0.28 → 0.196 → 0.1568 → 0.12544).
+  // Drip's transient attack puts most of its energy in a sub-millisecond
+  // peak that the ear reads as "loud" disproportionate to its perceived
+  // RMS — the original 0.28 made dense drip sequences pop above the
+  // rest of the mix. Successive cuts pull the transient peak down
+  // without losing the staccato bite.
+  const out = new Tone.Gain(0.12544);
   osc.connect(lp);
   lp.connect(env);
   env.connect(out);
@@ -941,15 +932,15 @@ function buildChord(rootFreq: number): PresetBuild {
   // LFO target; outFinal is a normal AudioParam we ramp down on dispose.
   const outDriven = new Tone.Gain(0);
   lp.connect(outDriven);
-  // Breathe period 16–32 s. Peak 0.056–0.1008 (was 0.10–0.18 → 0.07–0.126
-  // → another -20% pass). Like buildDrone above, the chord's internal
-  // sum (root + 0.45-0.7×fifth + 0.25-0.55×oct ≈ 2.25 worst case) gets
-  // scaled by the LFO peak to produce per-instance output. At the
-  // previous 0.126 cap per-instance peak was ~0.28; 0.1008 brings it
-  // to ~0.23, so 4–5 stacked chords stay under the master limiter
-  // threshold even on the LFO peaks.
+  // Breathe period 16–32 s. Peak 0.0448–0.08064 (cumulative: 0.10–0.18
+  // → 0.07–0.126 → 0.056–0.1008 → 0.0448–0.08064). Like buildDrone
+  // above, the chord's internal sum (root + 0.45-0.7×fifth +
+  // 0.25-0.55×oct ≈ 2.25 worst case) gets scaled by the LFO peak to
+  // produce per-instance output. At 0.08064 cap per-instance peak is
+  // ~0.18, well clear of the master limiter even with multiple chords
+  // overlapping at their swell peaks.
   const breathePeriod = 16 + Math.random() * 16;
-  const breathePeak = 0.056 + Math.random() * 0.0448;
+  const breathePeak = 0.0448 + Math.random() * 0.03584;
   const breathe = new Tone.LFO({
     frequency: 1 / breathePeriod,
     min: 0,

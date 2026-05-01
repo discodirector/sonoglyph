@@ -164,16 +164,23 @@ export function freqAt(
  * Hz — at those pitches the drone's saw harmonics ring through the LP
  * filter sweep (with Q resonance making the upper harmonics buzz), and
  * the chord's octave voice (root × 2) reaches ~933 Hz where it stops
- * blending and starts cutting. Pinning drone to oct 1 keeps the
- * fundamental at 33–93 Hz (root or fifth only — see pickFreqForLayer),
- * and chord to oct 2 keeps root at 65–233 Hz with the octave voice
- * still under 470 Hz — both back inside the "harmonic floor / mid pad"
- * identities the engine expects.
+ * blending and starts cutting. Drone was originally pinned to oct 1
+ * (fundamental 33–93 Hz) but that put the saw fundamental into a band
+ * most consumer playback systems can't reproduce cleanly: laptop
+ * speakers roll off below ~150 Hz and just don't output it; subwoofers
+ * struggle below ~25 Hz and produce irregular cone-flap that reads as
+ * crackle. Drone now sits at oct 2 (root 65–123 Hz, fifth 98–185 Hz)
+ * which all consumer playback can render as actual pitch — the deep
+ * "cave" identity comes mostly from the LP-filtered saw harmonics and
+ * the sub voice (one octave below, now safely 33–93 Hz) rather than
+ * from a subsonic fundamental. Chord stays at oct 2 (root 65–233 Hz)
+ * with the octave voice under 470 Hz — back inside the "harmonic
+ * floor / mid pad" identity the engine expects.
  */
 function preferredOctaves(type: LayerType): number[] {
   switch (type) {
     case 'drone':
-      return [1];
+      return [2];
     case 'pulse':
       return [2, 3];
     case 'chord':
@@ -251,11 +258,11 @@ function pickDegreeForIntent(
  * the root note — useful for the agent to anchor a quiet section.
  *
  * `drone` ignores intent entirely and is pinned to root or fifth. Drone's
- * job is to anchor the descent's harmonic floor; tension/color/emphasis on
- * a 33 Hz sub doesn't read musically, and letting drone wander up the
- * scale loses its identity (and pushes saw harmonics into unpleasant
- * resonance bands). Intent still drives the other 8 layer types where
- * pitch motion is a feature, not a bug.
+ * job is to anchor the descent's harmonic floor; tension/color/emphasis
+ * on a low fundamental doesn't read musically, and letting drone wander
+ * up the scale loses its identity (and pushes saw harmonics into
+ * unpleasant resonance bands). Intent still drives the other 8 layer
+ * types where pitch motion is a feature, not a bug.
  */
 export function pickFreqForLayer(
   scale: SessionScale,
