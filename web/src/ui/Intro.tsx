@@ -288,10 +288,12 @@ function CommandBlock({
           style={{
             position: 'absolute',
             top: 6,
-            // Pulled in from the right edge (6 → 14) so the button
-            // doesn't sit on top of the vertical scrollbar in
-            // scrollable mode (~14 px scrollbar width on most setups).
-            right: 14,
+            // Pulled in from the right edge (6 → 32) so the button
+            // sits clearly to the left of the vertical scrollbar in
+            // scrollable mode (~14 px scrollbar + comfortable gap, so
+            // the semi-transparent button background doesn't bleed
+            // into the scroll track visually).
+            right: 32,
             padding: '4px 10px',
             fontSize: 9,
             letterSpacing: '0.25em',
