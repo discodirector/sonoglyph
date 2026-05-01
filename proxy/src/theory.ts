@@ -173,9 +173,18 @@ export function freqAt(
  * which all consumer playback can render as actual pitch — the deep
  * "cave" identity comes mostly from the LP-filtered saw harmonics and
  * the sub voice (one octave below, now safely 33–93 Hz) rather than
- * from a subsonic fundamental. Chord stays at oct 2 (root 65–233 Hz)
- * with the octave voice under 470 Hz — back inside the "harmonic
- * floor / mid pad" identity the engine expects.
+ * from a subsonic fundamental.
+ *
+ * Chord moved oct 2 → oct 3 (root 130–247 Hz, octave voice 260–494 Hz).
+ * At oct 2 chord's root + fifth + octave (65–185, 98–278, 130–370 Hz)
+ * stacked directly on top of drone's fundamental + sub (33–185 Hz),
+ * doubling the bass mass — reproducible on consumer systems but the
+ * combined sub-region energy was driving the master limiter into
+ * frequent clamping (audible as crackle when chord and drone played
+ * together). Three sine partials at oct 3 stay clearly inside the
+ * "harmonic floor / mid pad" identity without invading drone's
+ * register; the LP at 1300–2400 Hz still passes all three voices
+ * unchanged so the timbre doesn't shift, just the pitch up an octave.
  */
 function preferredOctaves(type: LayerType): number[] {
   switch (type) {
@@ -184,7 +193,7 @@ function preferredOctaves(type: LayerType): number[] {
     case 'pulse':
       return [2, 3];
     case 'chord':
-      return [2]; // chord build adds 5 + octave on top inside the engine
+      return [3]; // chord build adds 5 + octave on top inside the engine
     case 'breath':
       return [3, 4];
     case 'bell':

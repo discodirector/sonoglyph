@@ -32,6 +32,33 @@ import type { SessionScalePublic } from '../net/protocol';
 
 let initialized = false;
 let master: Tone.Limiter;
+/**
+ * Subsonic high-pass — sits in series between `master` (Limiter) and
+ * `masterDuck`. Cuts everything below ~40 Hz before it reaches the
+ * destination + recorder.
+ *
+ * Why: the descent's bass region stacks contributions from drone (saw
+ * fundamental 65–185 Hz + sine sub 33–93 Hz), chord (3 sines, now at
+ * oct 3 after the latest move), and DEEP pad (sine sub at oct 1,
+ * 33–62 Hz). Even after the cumulative -55% volume cuts, the *combined*
+ * sub-band energy on a single playback system was hitting two failure
+ * modes:
+ *
+ *   1. Laptop speakers can't reproduce <150 Hz cleanly — what reaches
+ *      the cone is irregular and reads as "crackle". Worse, any
+ *      sub-30 Hz content makes the cone flap audibly without producing
+ *      pitch.
+ *   2. Subs/headphones reproduce sub content faithfully, including the
+ *      sub-30 Hz part that simply has nothing musical in it — just
+ *      adds energy that drives the limiter harder without being heard
+ *      as bass.
+ *
+ * 40 Hz is a standard mastering-style cut: well below the lowest
+ * musically useful note (E1 ≈ 41 Hz), but above the speaker-cone-flap
+ * region. With Q ≈ 0.7 (Butterworth) the slope is gentle enough to
+ * not phase-shift the audible bass.
+ */
+let masterHpf: Tone.Filter;
 let masterDuck: Tone.Gain;
 let masterMix: Tone.Gain;
 let voiceGain: Tone.Gain;
@@ -67,10 +94,17 @@ export async function initAudio(): Promise<void> {
   // Final summing point — feeds destination + recorder.
   masterMix = new Tone.Gain(1).toDestination();
 
-  // Layers route: master → masterDuck → masterMix
+  // Layers route: master → masterHpf → masterDuck → masterMix.
+  // HPF sits AFTER the limiter on purpose — limiter clamps based on the
+  // pre-filter signal (subsonics included), but those subsonics never
+  // reach the speakers because the HPF strips them on the way out. The
+  // limiter doesn't pump audibly on sub-40 Hz content because the fast
+  // attack (5 ms) is well below sub-frequency periods (>25 ms at 40 Hz).
   master = new Tone.Limiter(-1);
+  masterHpf = new Tone.Filter({ frequency: 40, type: 'highpass', Q: 0.707 });
   masterDuck = new Tone.Gain(1);
-  master.connect(masterDuck);
+  master.connect(masterHpf);
+  masterHpf.connect(masterDuck);
   masterDuck.connect(masterMix);
 
   // Voice route: voiceGain → masterMix (bypasses duck)
@@ -339,6 +373,18 @@ function buildDrone(freq: number): PresetBuild {
   // the true sub-octave.
   const subFreq = freq / 2 < 30 ? freq : freq / 2;
   const sub = new Tone.Oscillator({ frequency: subFreq, type: 'sine' });
+  // Sub attenuation — was 1.0 (sub at full level alongside the saw).
+  // At full level the sub voice was the dominant bass contributor in
+  // the descent: even though drone's overall env is at 0.07168, the
+  // sub sine at 33–93 Hz reproduces flat through the LP filter (which
+  // sits at 220–450 Hz centre, well above sub frequencies), so it hit
+  // the bus at full strength. With multiple drones engaged plus chord
+  // and DEEP pad, cumulative sub-band energy was driving the limiter
+  // hard enough to crackle. 0.5 (-6 dB) keeps the sub's body but
+  // halves its contribution to the bass mass; combined with the
+  // master HPF at 40 Hz (which clips the bottom 1/3 of sub's range
+  // when freq=65 Hz), drone's sub energy is now ~40% of what it was.
+  const subAtten = new Tone.Gain(0.5);
   // Octave-up triangle voice — bypasses the LP filter so it provides
   // constant audible body even when the LFO closes the cutoff. The
   // saw fundamental sits at 65–185 Hz now (drone moved from oct 1 to
@@ -376,7 +422,8 @@ function buildDrone(freq: number): PresetBuild {
   const gain = new Tone.Gain(0);
 
   osc.connect(srcMix);
-  sub.connect(srcMix);
+  sub.connect(subAtten);
+  subAtten.connect(srcMix);
   srcMix.connect(filter);
   filter.connect(gain);
 
@@ -422,6 +469,7 @@ function buildDrone(freq: number): PresetBuild {
         try {
           osc.stop().dispose();
           sub.stop().dispose();
+          subAtten.dispose();
           octUp.stop().dispose();
           srcMix.dispose();
           filter.dispose();
