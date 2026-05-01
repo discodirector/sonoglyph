@@ -101,6 +101,7 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
         <PairingPanel
           command={pairing.hermesCommand}
           prompt={pairing.hermesPrompt}
+          code={pairing.code}
         />
       )}
 
@@ -141,7 +142,78 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
 }
 
 // -----------------------------------------------------------------------------
+type SetupTab = 'auto' | 'manual';
+
+/**
+ * Setup-instructions panel with two switchable tabs:
+ *
+ *   auto   — `hermes mcp add … && hermes chat --yolo`. The fast path
+ *            for players whose Hermes install can parse the `--url`
+ *            flag correctly. Includes the TROUBLESHOOT dropdown
+ *            because that path can fail silently (Hermes runs straight
+ *            into the chat without prompting), and the troubleshooter
+ *            ships a ready-made fix-prompt the player hands to their
+ *            own Hermes.
+ *
+ *   manual — direct edit of `~/.hermes/config.yaml`. No CLI flags
+ *            involved, so it bypasses the bug that motivates the
+ *            auto-tab troubleshooter; consequently the manual tab
+ *            does NOT show the troubleshooter (it would be empty
+ *            advice — there's nothing for it to fix).
+ *
+ * Tab state is local because it's purely a presentation choice that
+ * shouldn't survive page reloads — fresh visitors get the auto path
+ * by default since it's two-line setup vs the manual seven-step.
+ */
 function PairingPanel({
+  command,
+  prompt,
+  code,
+}: {
+  command: string;
+  prompt: string;
+  code: string;
+}) {
+  const [tab, setTab] = useState<SetupTab>('auto');
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 18,
+        alignItems: 'stretch',
+        maxWidth: 720,
+        width: '100%',
+        textAlign: 'left',
+      }}
+    >
+      {/* Tab switcher. Two buttons sharing the panel width so each
+          tab has equal visual weight regardless of label length —
+          the auto tab is shorter to type but the manual tab covers
+          a real fallback need (Hermes installs with the --url bug),
+          and we don't want the buttons to suggest one is "primary"
+          via size. */}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <TabButton active={tab === 'auto'} onClick={() => setTab('auto')}>
+          ① Automatic Setup
+        </TabButton>
+        <TabButton active={tab === 'manual'} onClick={() => setTab('manual')}>
+          ② Manual Config
+        </TabButton>
+      </div>
+
+      {tab === 'auto' ? (
+        <AutomaticTab command={command} prompt={prompt} />
+      ) : (
+        <ManualTab code={code} prompt={prompt} />
+      )}
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+function AutomaticTab({
   command,
   prompt,
 }: {
@@ -149,64 +221,55 @@ function PairingPanel({
   prompt: string;
 }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 14,
-        alignItems: 'center',
-        maxWidth: 720,
-        width: '100%',
-      }}
-    >
-      {/* Descent code is no longer surfaced to the player: it's
-          already embedded in both the `hermes mcp add` command (as
-          a query parameter on the MCP URL) and in the chat prompt,
-          so the only thing the player would do with a visible code
-          is double-check what they already pasted. Removing it
-          declutters the panel and shifts the eye straight to the
-          two-step instructions. */}
-      <CommandBlock
-        label="① IN TERMINAL — RUN, ANSWER PROMPTS WITH 'Y'"
-        labelColor="#c9885b"
-        body={command}
-      />
-      <CommandBlock
-        label="② IN THE OPENED HERMES CHAT, PASTE THIS AND HIT ENTER"
-        labelColor="#c9885b"
-        body={prompt}
-      />
-      <div
-        style={{
-          fontSize: 11,
-          letterSpacing: '0.2em',
-          color: '#c9885b',
-          textAlign: 'center',
-          maxWidth: 540,
-          lineHeight: 1.7,
-        }}
-      >
-        KEEP THE TERMINAL OPEN THROUGHOUT THE GAME.
-        <br />
-        ONCE THE AGENT PAIRED LIGHT IS ON, HIT BEGIN AND PLACE YOUR FIRST LAYER.
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+      <Step number={1} title="Run the setup command">
+        <p style={stepText}>Open your terminal and execute:</p>
+        <CommandBlock body={command} />
+        <Callout kind="warn">
+          If the terminal does <strong>not</strong> ask you any questions about
+          the connection and goes straight into the chat, close it and jump to
+          the <strong>Troubleshoot</strong> section below.
+        </Callout>
+      </Step>
 
+      <Step number={2} title="Answer the prompts">
+        <p style={stepText}>
+          For the connection question — answer <Inline>Y</Inline>.
+          <br />
+          For the API key question — just press <Inline>Enter</Inline> to leave
+          it empty.
+        </p>
+        <p style={{ ...stepText, color: '#6a6660' }}>
+          Once you've answered both, the chat will launch.
+        </p>
+      </Step>
+
+      <Step number={3} title="Send the composition prompt">
+        <p style={stepText}>Paste this prompt into the chat:</p>
+        <CommandBlock body={prompt} scrollable />
+      </Step>
+
+      <Step number={4} title="Play">
+        <Callout kind="info">
+          KEEP THE TERMINAL OPEN THROUGHOUT THE GAME.
+          <br />
+          Once the <strong>AGENT PAIRED</strong> light is on, hit{' '}
+          <strong>BEGIN</strong> and place your first layer.
+        </Callout>
+      </Step>
+
+      {/* Troubleshoot details — only here in the auto tab, since the
+          --url flag bug it patches doesn't apply when the player
+          hand-edits config.yaml. */}
       <details
         style={{
           width: '100%',
-          maxWidth: 720,
           fontSize: 11,
           letterSpacing: '0.2em',
           color: '#6a6660',
           textAlign: 'left',
         }}
       >
-        {/* Summary gets its own color — a muted red (#c95b5b, same
-            lightness/saturation profile as the #c9885b orange but
-            shifted in hue) so it reads as "something's wrong" rather
-            than "next instruction in the happy path". The body
-            inherits the muted #6a6660 from <details> so the
-            troubleshoot prose stays low-emphasis. */}
         <summary style={{ cursor: 'pointer', padding: '4px 0', color: '#c95b5b' }}>
           NOT WORKING? TROUBLESHOOT ↓
         </summary>
@@ -241,6 +304,266 @@ function PairingPanel({
         </div>
       </details>
     </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+function ManualTab({ code, prompt }: { code: string; prompt: string }) {
+  // Heredoc that creates `~/.hermes/config.yaml` if missing and appends
+  // the sonoglyph entry. The 'EOF' marker is single-quoted on purpose —
+  // it stops the shell from expanding `$` inside (the URL has none, but
+  // a future operator change could introduce one and it's cheap
+  // insurance).
+  const writeConfig =
+    `mkdir -p ~/.hermes && touch ~/.hermes/config.yaml && cat >> ~/.hermes/config.yaml << 'EOF'\n` +
+    `mcp_servers:\n` +
+    `  sonoglyph:\n` +
+    `    url: https://sonoglyph.xyz/mcp?code=${code}\n` +
+    `    enabled: true\n` +
+    `EOF`;
+
+  // Snippet for the "I already have other servers" path — just the
+  // server entry, indented two spaces under the assumed existing
+  // `mcp_servers:` parent.
+  const yamlSnippet =
+    `  sonoglyph:\n` +
+    `    url: https://sonoglyph.xyz/mcp?code=${code}\n` +
+    `    enabled: true`;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+      <Step number={1} title="Open your terminal">
+        <p style={stepText}>
+          Open the terminal on the machine where Hermes is installed.
+        </p>
+      </Step>
+
+      <Step number={2} title="Configure the MCP server">
+        <SubStep label="Option A — You don't have any MCP servers yet">
+          <p style={stepText}>
+            Run this command to create the config file and add Sonoglyph:
+          </p>
+          <CommandBlock body={writeConfig} />
+        </SubStep>
+
+        <SubStep label="Option B — You already have MCP servers configured">
+          <p style={stepText}>
+            Open <Inline>~/.hermes/config.yaml</Inline> in your editor and add{' '}
+            <Inline>sonoglyph</Inline> to the existing{' '}
+            <Inline>mcp_servers</Inline> list:
+          </p>
+          <CommandBlock body={yamlSnippet} />
+          <p style={{ ...stepText, color: '#6a6660' }}>
+            Make sure the indentation matches your other servers (two spaces
+            under <Inline>mcp_servers:</Inline>).
+          </p>
+        </SubStep>
+      </Step>
+
+      <Step number={3} title="Verify the configuration">
+        <p style={stepText}>
+          Run these commands to confirm the server is registered and reachable:
+        </p>
+        <CommandBlock body={'hermes mcp list\nhermes mcp test sonoglyph'} />
+        <p style={{ ...stepText, color: '#6a6660' }}>
+          You should see <Inline>sonoglyph</Inline> in the list and a
+          successful test response.
+        </p>
+      </Step>
+
+      <Step number={4} title="Launch Hermes">
+        <p style={stepText}>Start the agent:</p>
+        <CommandBlock body="hermes" />
+      </Step>
+
+      <Step number={5} title="Trigger Sonoglyph in chat">
+        <p style={stepText}>Send this message to Hermes:</p>
+        <CommandBlock body="Run Sonoglyph" />
+      </Step>
+
+      <Step number={6} title="Send the composition prompt">
+        <p style={stepText}>
+          Paste the following prompt into the chat to drive the autonomous
+          co-composition loop:
+        </p>
+        <CommandBlock body={prompt} scrollable />
+      </Step>
+
+      <Step number={7} title="Return to the site and play">
+        <p style={stepText}>
+          Go back to the Sonoglyph site and start the game.
+        </p>
+        <Callout kind="info">
+          The access code is <strong>single-use</strong>. To play again, you'll
+          need to update your config with a fresh code.
+          <br />
+          <br />
+          Alternatively, switch to the <strong>Automatic Setup</strong> tab —
+          but if your Hermes install has the <Inline>--url</Inline> flag bug,
+          ask your agent to apply the fix prompt available there first.
+        </Callout>
+      </Step>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Layout helpers — Step / SubStep / Callout / Inline / TabButton.
+//
+// These don't need their own files; they're intro-screen-specific
+// shapes layered on top of the global IBM Plex Mono + dark palette.
+// Keeping them inline means a hackathon-judge reading Intro.tsx
+// straight through gets the full picture without jumping files.
+// -----------------------------------------------------------------------------
+
+const stepText: React.CSSProperties = {
+  margin: 0,
+  fontSize: 13,
+  lineHeight: 1.7,
+  color: '#d8d4cf',
+  letterSpacing: '0.02em',
+};
+
+function Step({
+  number,
+  title,
+  children,
+}: {
+  number: number;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div
+        style={{
+          fontSize: 11,
+          letterSpacing: '0.3em',
+          color: '#c9885b',
+          textTransform: 'uppercase',
+          fontWeight: 500,
+        }}
+      >
+        Step {number} · {title}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function SubStep({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        paddingLeft: 12,
+        borderLeft: '1px solid #2a2a2e',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          letterSpacing: '0.15em',
+          color: '#a09d99',
+          textTransform: 'uppercase',
+        }}
+      >
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Callout({
+  kind,
+  children,
+}: {
+  /** `warn` paints a red left-border (matches the Troubleshoot summary
+   *  color — "something to be careful about"). `info` uses the orange
+   *  accent — same as Step headers, "this is part of the instruction
+   *  flow, just emphasized". */
+  kind: 'warn' | 'info';
+  children: React.ReactNode;
+}) {
+  const accent = kind === 'warn' ? '#c95b5b' : '#c9885b';
+  return (
+    <div
+      style={{
+        padding: '10px 14px',
+        background: 'rgba(255,255,255,0.03)',
+        borderLeft: `2px solid ${accent}`,
+        borderTop: '1px solid #2a2a2e',
+        borderRight: '1px solid #2a2a2e',
+        borderBottom: '1px solid #2a2a2e',
+        borderRadius: 3,
+        fontSize: 12,
+        lineHeight: 1.6,
+        color: '#d8d4cf',
+        letterSpacing: '0.02em',
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Inline({ children }: { children: React.ReactNode }) {
+  return (
+    <code
+      style={{
+        fontFamily: 'inherit',
+        background: 'rgba(255,255,255,0.06)',
+        padding: '1px 6px',
+        border: '1px solid #2a2a2e',
+        borderRadius: 3,
+        fontSize: '0.92em',
+        color: '#d8d4cf',
+      }}
+    >
+      {children}
+    </code>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        flex: 1,
+        padding: '10px 14px',
+        fontSize: 12,
+        letterSpacing: '0.18em',
+        textTransform: 'uppercase',
+        fontFamily: 'inherit',
+        background: active ? '#c9885b' : 'transparent',
+        color: active ? '#050507' : '#a09d99',
+        border: `1px solid ${active ? '#c9885b' : '#3a3a3e'}`,
+        cursor: active ? 'default' : 'pointer',
+        transition: 'background 160ms ease, color 160ms ease, border 160ms ease',
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
