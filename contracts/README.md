@@ -6,25 +6,23 @@ ERC-721 of completed Sonoglyph descents. Fully on-chain rendering of glyph
 
 ## Deployed
 
-| Network        | Chain ID | Address | Format |
-|----------------|----------|---------|--------|
-| **Monad mainnet** _(production)_ | 143    | [`0x17aA406cc810f7c5E66c41e763c0eF5333AecAc2`](https://monadexplorer.com/address/0x17aA406cc810f7c5E66c41e763c0eF5333AecAc2) | HTML `animation_url` |
-| Monad testnet _(development)_   | 10143  | [`0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931`](https://testnet.monadexplorer.com/address/0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931) | `ipfs://` `animation_url` (v0) |
+| Network        | Chain ID | Address | tokenURI |
+|----------------|----------|---------|----------|
+| **Monad mainnet** _(production)_ | 143    | [`0x35d797C06975295F111effc6486C3A93F907048B`](https://monadexplorer.com/address/0x35d797C06975295F111effc6486C3A93F907048B) | v2 — HTML, player at bottom edge |
+| Monad testnet _(development)_   | 10143  | [`0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931`](https://testnet.monadexplorer.com/address/0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931) | v0 — `ipfs://` audio only |
 
-Mainnet was redeployed at deployer-nonce 2 (after the v0 mainnet deploy
-at nonce 0 + first mint at nonce 1) so the new mainnet address differs
-from testnet. v0 token #1 at the old mainnet address remains as a
-historical artifact.
+The mainnet contract was iterated a few times during the hackathon as the
+on-chain `tokenURI` rendering evolved. Storage layout is unchanged across
+versions — only the `_renderHtml` / SVG output differs — so the bridge and
+frontend just track the latest `SONOGLYPH_CONTRACT_ADDRESS` from `.env`.
 
-The two contracts differ only in `tokenURI`'s `animation_url` field:
-- v0 (`ipfs://<audioCid>`) → marketplace falls back to its built-in audio
-  player; the glyph appears only as a thumbnail.
-- v1 (`data:text/html;base64,<page>`) → marketplace renders a self-contained
-  page that shows the glyph AND plays the audio together. See
-  `_renderHtml` in `src/Sonoglyph.sol`.
+Earlier mainnet deploys (kept as historical artifacts):
+- `0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931` — v0, `animation_url = ipfs://<audio>`
+- `0x17aA406cc810f7c5E66c41e763c0eF5333AecAc2` — v1, HTML page but player centered
 
-Mint storage layout is identical, so nothing else (bridge, frontend) had
-to change beyond the `SONOGLYPH_CONTRACT_ADDRESS` env update.
+v2 (current) renders the glyph centered in the upper region with the audio
+controls anchored at the bottom edge of the iframe — the layout marketplaces
+expect for an audiovisual NFT.
 
 Owner / sole minter: `0x331d5F69d188b1A37B0b1D6dd058f76b52e4457b` — the
 bridge wallet, used by `proxy/` to sign mint transactions on the player's
