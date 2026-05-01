@@ -330,7 +330,26 @@ function buildDrone(freq: number): PresetBuild {
   // the same descent don't lock onto identical phase.
   const detune = (Math.random() - 0.5) * 50;
   const osc = new Tone.Oscillator({ frequency: freq, type: 'sawtooth', detune });
-  const sub = new Tone.Oscillator({ frequency: freq / 2, type: 'sine' });
+  // Sub voice. Originally always one octave below the fundamental, but
+  // drone fundamentals span 33–92 Hz, so freq/2 lands at 16–46 Hz —
+  // below the ~20 Hz pitch-perception threshold for low-key drones, and
+  // below most playback systems' clean reproduction range. The ear
+  // resolves a 16 Hz sine as ~16 discrete clicks per second, and even
+  // proper subwoofers struggle below ~25 Hz: the cone tries to track
+  // a wave it can't reproduce and flaps irregularly. That intermittent
+  // click was the residual drone crackle remaining after we cut the
+  // master limiter peaks.
+  //
+  // Fix: floor the sub at 30 Hz. When the natural sub-octave would
+  // fall below that, fall back to unison with the fundamental — a
+  // sine doubling that thickens the saw's fundamental without
+  // introducing any subsonic content. Above 30 Hz we keep the true
+  // sub-octave for the deep anchor on systems that can render it.
+  // Net effect: roughly half the drones (those in low keys + low
+  // degrees) lose the octave-down voice in favour of a unison
+  // thickener; the rest are unchanged.
+  const subFreq = freq / 2 < 30 ? freq : freq / 2;
+  const sub = new Tone.Oscillator({ frequency: subFreq, type: 'sine' });
   // Octave-up triangle voice — bypasses the LP filter so it provides
   // constant audible body even when the LFO closes the cutoff. With
   // drone fundamental at 33–93 Hz, laptop speakers (which roll off below
@@ -359,7 +378,8 @@ function buildDrone(freq: number): PresetBuild {
   });
 
   // octUp at -9dB relative to saw/sub. Loud enough to be heard on any
-  // playback, quiet enough not to overshadow the sub anchor.
+  // playback (laptop speakers can reach 66+ Hz), quiet enough that the
+  // saw + sub pair stays the dominant identity of the voice.
   const octUpAtten = new Tone.Gain(0.35);
 
   // Master env. Also acts as the summing point where the filtered
