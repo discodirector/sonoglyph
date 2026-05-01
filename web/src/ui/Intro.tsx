@@ -187,11 +187,13 @@ function PairingPanel({
           textAlign: 'left',
         }}
       >
-        {/* Summary gets its own color — the orange accent groups it
-            with the other instructional labels above (① / ② / KEEP…),
-            but the body inherits the muted #6a6660 from <details> so
-            the troubleshoot prose stays low-emphasis. */}
-        <summary style={{ cursor: 'pointer', padding: '4px 0', color: '#c9885b' }}>
+        {/* Summary gets its own color — a muted red (#c95b5b, same
+            lightness/saturation profile as the #c9885b orange but
+            shifted in hue) so it reads as "something's wrong" rather
+            than "next instruction in the happy path". The body
+            inherits the muted #6a6660 from <details> so the
+            troubleshoot prose stays low-emphasis. */}
+        <summary style={{ cursor: 'pointer', padding: '4px 0', color: '#c95b5b' }}>
           NOT WORKING? TROUBLESHOOT ↓
         </summary>
         <div
