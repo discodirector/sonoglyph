@@ -309,26 +309,56 @@ function buildDrone(freq: number): PresetBuild {
   const detune = (Math.random() - 0.5) * 50;
   const osc = new Tone.Oscillator({ frequency: freq, type: 'sawtooth', detune });
   const sub = new Tone.Oscillator({ frequency: freq / 2, type: 'sine' });
+  // Octave-up triangle voice — bypasses the LP filter so it provides
+  // constant audible body even when the LFO closes the cutoff. With
+  // drone fundamental at 33–93 Hz, laptop speakers (which roll off below
+  // ~150 Hz) can't reproduce the saw fundamental at all; without this
+  // voice you'd hear only the swept saw harmonics, which read as "noisy
+  // buzz with no body". Triangle's 1/n² harmonic falloff keeps it gentle
+  // even unfiltered.
+  const octUp = new Tone.Oscillator({ frequency: freq * 2, type: 'triangle' });
+
+  // Sources: saw + sub merge here, then go through the swept LP. octUp
+  // routes around the filter and joins back at the final env (`gain`).
+  const srcMix = new Tone.Gain(1);
+
   // Cutoff fluctuates session-to-session: 220-450 Hz centre. Lower = more
   // muffled, higher = more present.
   const filterCenter = 220 + Math.random() * 230;
   const filter = new Tone.Filter({
     frequency: filterCenter,
     type: 'lowpass',
-    // Q in 0.7..1.8 — at the high end the cutoff rings, giving the drone
-    // a vocal resonance; at the low end it sits as flat low-end weight.
-    Q: 0.7 + Math.random() * 1.1,
+    // Q in 0.5..0.9 (was 0.7..1.8). Above 1.0 the filter resonates at
+    // the cutoff; on the swept LFO that meant a moving formant peak rang
+    // through whichever saw harmonic crossed it — the "vocal buzz" the
+    // user heard as noise. Capping below resonance gives a smooth
+    // roll-off instead.
+    Q: 0.5 + Math.random() * 0.4,
   });
+
+  // octUp at -9dB relative to saw/sub. Loud enough to be heard on any
+  // playback, quiet enough not to overshadow the sub anchor.
+  const octUpAtten = new Tone.Gain(0.35);
+
+  // Master env. Also acts as the summing point where the filtered
+  // (saw+sub) branch and the unfiltered (octUp) branch merge.
   const gain = new Tone.Gain(0);
-  osc.connect(gain);
-  sub.connect(gain);
-  gain.connect(filter);
+
+  osc.connect(srcMix);
+  sub.connect(srcMix);
+  srcMix.connect(filter);
+  filter.connect(gain);
+
+  octUp.connect(octUpAtten);
+  octUpAtten.connect(gain);
 
   // LFO period 6.5–40s (was ~10–25s). Slow drones now actually drift slowly.
-  // LFO sweep range also varies: in dim mode it stays in the bass; in
-  // bright mode it climbs into mid territory before settling back.
+  // LFO sweep range narrowed: lfoMax 400–800 (was 600–1400). Capping the
+  // peak below 800 Hz keeps saw harmonics from ringing through the filter
+  // when the LFO opens up — that was the "shleyf" the user heard as the
+  // buzzy phase took 5–15 s to subside per LFO cycle.
   const lfoMin = 120 + Math.random() * 160;
-  const lfoMax = 600 + Math.random() * 800;
+  const lfoMax = 400 + Math.random() * 400;
   const lfo = new Tone.LFO({
     frequency: 0.025 + Math.random() * 0.13,
     min: lfoMin,
@@ -339,10 +369,11 @@ function buildDrone(freq: number): PresetBuild {
 
   osc.start();
   sub.start();
+  octUp.start();
   gain.gain.rampTo(0.16, 4);
 
   return {
-    output: filter,
+    output: gain,
     freq,
     dispose: () => {
       gain.gain.rampTo(0, 2.5);
@@ -350,7 +381,10 @@ function buildDrone(freq: number): PresetBuild {
         try {
           osc.stop().dispose();
           sub.stop().dispose();
+          octUp.stop().dispose();
+          srcMix.dispose();
           filter.dispose();
+          octUpAtten.dispose();
           gain.dispose();
           lfo.stop().dispose();
         } catch {
@@ -408,15 +442,29 @@ function buildTexture(freq: number): PresetBuild {
 }
 
 function buildPulse(freq: number): PresetBuild {
-  // Pulse waveform varies — triangle is the soft default, sawtooth gives a
-  // more reedy/voicelike pulse, square gives a hollow chiptune-y one. Each
-  // session-instance picks one; the player perceives "different pulses".
+  // Pulse waveform — triangle is the soft default (weighted 2/3),
+  // sawtooth gives a more reedy/voicelike pulse (1/3). Square was
+  // dropped: its slowly-falling odd-harmonic spectrum (1/n) at high
+  // pitches sat right in the 2-4 kHz Fletcher-Munson sensitivity peak,
+  // reading as "shrill" rather than "pulse".
   // `as const` is needed because Tone.Oscillator's options-object overload
   // overlaps with the partial-oscillator one — without literal narrowing,
   // tsc can't figure out which overload `type: wave` belongs to.
-  const waveforms = ['triangle', 'sawtooth', 'square'] as const;
+  const waveforms = ['triangle', 'triangle', 'sawtooth'] as const;
   const wave = waveforms[Math.floor(Math.random() * waveforms.length)];
   const osc = new Tone.Oscillator({ frequency: freq, type: wave });
+  // LP at 4× fundamental — preserves the first 3-4 harmonics (which give
+  // pulse its waveform character) but cuts everything above ~2 kHz at
+  // the high end of the pitch range. Without this the saw pulse at oct 3
+  // (~466 Hz fundamental, harmonics up to Nyquist) leaked harsh content
+  // through to master, where the ear's 2-4 kHz sensitivity peak picked
+  // it up as the "loud and unpleasant" complaint. Q 0.6..0.9 — well
+  // below resonance, just a smooth roll-off, no formant.
+  const filter = new Tone.Filter({
+    frequency: freq * 4,
+    type: 'lowpass',
+    Q: 0.6 + Math.random() * 0.3,
+  });
   const env = new Tone.AmplitudeEnvelope({
     attack: 1.0 + Math.random() * 1.6,    // 1.0–2.6s (was 1.6 fixed)
     decay: 0.4 + Math.random() * 0.7,     // 0.4–1.1s
@@ -424,7 +472,8 @@ function buildPulse(freq: number): PresetBuild {
     release: 1.5 + Math.random() * 1.8,   // 1.5–3.3s
   });
   const gain = new Tone.Gain(0.18);
-  osc.connect(env);
+  osc.connect(filter);
+  filter.connect(env);
   env.connect(gain);
   osc.start();
 
@@ -446,6 +495,7 @@ function buildPulse(freq: number): PresetBuild {
       window.setTimeout(() => {
         try {
           env.dispose();
+          filter.dispose();
           osc.stop().dispose();
           gain.dispose();
         } catch {
