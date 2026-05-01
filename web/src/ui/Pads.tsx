@@ -38,9 +38,14 @@ const PAD_ACCENT: Record<PadId, string> = {
 
 // One-line description shown under each pad's title, so a player who
 // doesn't know synth pad lingo still gets a sense of what each does.
+// Each hint MUST stay on a single line at the cell's content width
+// (~70 px @ 9 px font with 0.1em letter-spacing → ~12 chars). "high
+// shimmer" used to wrap into two lines, which pushed AIR's label up
+// relative to GLOW/DEEP because the cells are flex-justify-between
+// (label sits between the top dot and the bottom hint).
 const PAD_HINT: Record<PadId, string> = {
   glow: 'warm body',
-  air: 'high shimmer',
+  air: 'shimmer',
   deep: 'deep sub',
 };
 
@@ -214,6 +219,11 @@ function PadCell({
           textTransform: 'lowercase',
           fontStyle: 'italic',
           opacity: 0.85,
+          // Prevent wrapping — a 2-line hint would push the title up and
+          // misalign GLOW / AIR / DEEP across the row. If a future hint
+          // ever overflows, it'll get clipped instead, which we'd see
+          // immediately rather than silently breaking the layout.
+          whiteSpace: 'nowrap',
         }}
       >
         {PAD_HINT[id]}
