@@ -232,32 +232,42 @@ contract Sonoglyph is ERC721, Ownable {
      * ratio: square (OpenSea), wide (Twitter card), tall (mobile).
      */
     function _renderHtml(Descent memory d) internal pure returns (string memory) {
-        // Split into head (verbatim CSS) and body (token-specific). Two
-        // string.concat calls keep arg counts comfortably under any
-        // stack-depth limit and make the structure readable.
+        // Layout strategy: body is a flex column the full height of the
+        // iframe, with three pieces stacked top-to-bottom:
+        //   1. .glyph    flex:1 — fills all unused vertical space, centers
+        //                 the <pre> within itself. The glyph sits roughly
+        //                 in the middle but the area resizes with the
+        //                 viewport, so wide/tall iframes both work.
+        //   2. .foot     small "SONOGLYPH · code" caption, just above the
+        //                 player. Reads like a track title.
+        //   3. <audio>   browser-native controls, last child, flush against
+        //                 the bottom padding. This is what makes the play
+        //                 button appear at the bottom edge of the iframe
+        //                 instead of floating in the middle.
+        // Two string.concat calls (head, body) keep per-call arg counts
+        // comfortable.
         string memory head = string.concat(
             '<!doctype html><html lang="en"><head><meta charset="utf-8">',
             '<meta name="viewport" content="width=device-width,initial-scale=1">',
             '<title>Sonoglyph</title><style>',
-            'html,body{margin:0;height:100%;background:#050507;color:#c9885b;',
-            'font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden}',
-            'body{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4vmin}',
+            '*{box-sizing:border-box}html,body{margin:0;height:100%;background:#050507;color:#c9885b;font-family:ui-monospace,Menlo,Consolas,monospace;overflow:hidden}',
+            'body{display:flex;flex-direction:column;min-height:100vh;padding:4vmin;gap:2vmin}',
+            '.glyph{flex:1;display:flex;align-items:center;justify-content:center;min-height:0}',
             'pre{font-size:1.6vmin;line-height:1.05;letter-spacing:.05em;margin:0;text-align:center;white-space:pre;text-shadow:0 0 6px rgba(201,136,91,.2)}',
-            'audio{width:60vmin;max-width:520px;margin-top:6vmin;filter:invert(.85)}',
-            '.foot{margin-top:4vmin;display:flex;flex-direction:column;align-items:center;gap:.6vmin;color:#6a6660;font-size:1.2vmin;letter-spacing:.4em}',
+            '.foot{display:flex;flex-direction:column;align-items:center;gap:.6vmin;color:#6a6660;font-size:1.2vmin;letter-spacing:.4em}',
             '.code{color:#4a463f;font-size:1vmin;letter-spacing:.3em}',
+            'audio{width:100%;max-width:680px;align-self:center;filter:invert(.85)}',
             '</style></head><body>'
         );
         return string.concat(
             head,
-            "<pre>",
+            '<div class="glyph"><pre>',
             _escapeHtml(d.glyph),
-            '</pre><audio src="https://ipfs.io/ipfs/',
-            _escapeHtml(d.audioCid),
-            '" controls autoplay loop preload="auto"></audio>',
-            '<div class="foot">SONOGLYPH<div class="code">',
+            '</pre></div><div class="foot">SONOGLYPH<div class="code">',
             _escapeHtml(d.sessionCode),
-            "</div></div></body></html>"
+            '</div></div><audio src="https://ipfs.io/ipfs/',
+            _escapeHtml(d.audioCid),
+            '" controls autoplay loop preload="auto"></audio></body></html>'
         );
     }
 
