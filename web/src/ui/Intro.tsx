@@ -238,9 +238,11 @@ function AutomaticTab({
           <br />
           For the API key question — just press <Inline>Enter</Inline> to leave
           it empty.
+          <br />
+          For the tools question — answer <Inline>Y</Inline>.
         </p>
         <p style={{ ...stepText, color: '#6a6660' }}>
-          Once you've answered both, the chat will launch.
+          Once you've answered all three, the chat will launch.
         </p>
       </Step>
 
