@@ -363,7 +363,31 @@ function buildDrone(freq: number): PresetBuild {
   // between the saw and the sub, and so two drones at the same pitch in
   // the same descent don't lock onto identical phase.
   const detune = (Math.random() - 0.5) * 50;
-  const osc = new Tone.Oscillator({ frequency: freq, type: 'sawtooth', detune });
+  // Fundamental wave: triangle, NOT sawtooth (was sawtooth through Day 6).
+  //
+  // Saw has a hard-edge discontinuity at every period — the waveform jumps
+  // from +1 back to -1 instantaneously. Even with bandlimited oscillators
+  // the discontinuity manifests as a sharp transient at the start of each
+  // period (every 5.4–15.4 ms at drone's oct 2 fundamentals 65–185 Hz).
+  // With the LFO sweeping LP cutoff between lfoMin (~120) and lfoMax
+  // (formerly 400–800 Hz), at MAX cutoff the filter let through the saw's
+  // upper harmonics and the edge transient with them — audible as a few
+  // discrete clicks per LFO peak. At MIN cutoff the harmonics are
+  // smoothed out and the click is inaudible. So clicks only appeared on
+  // peaks of the LFO sweep — exactly the symptom the listener reported,
+  // even with a single drone alone.
+  //
+  // Triangle has no edge discontinuity — the waveform is continuous, only
+  // its derivative has corners. Harmonic content rolls off as 1/n²
+  // (third harmonic at 1/9, fifth at 1/25, seventh at 1/49) versus saw's
+  // 1/n. So the LP filter has very little upper-harmonic content to deal
+  // with regardless of cutoff position; nothing to crack on at peak.
+  // Tradeoff: drone's "growl" identity softens. The saw character lives
+  // mostly in the upper harmonics (3rd–8th) which the LP was filtering
+  // out most of the time anyway; triangle keeps the low-order body
+  // (fundamental + 3rd harmonic at much reduced level) which is what
+  // the listener actually heard.
+  const osc = new Tone.Oscillator({ frequency: freq, type: 'triangle', detune });
   // Sub voice — one octave below the fundamental. With drone now at
   // oct 2 (fundamental 65–185 Hz, see proxy/src/theory.ts), the sub
   // lands at 33–93 Hz which is cleanly reproducible on most playback
@@ -430,13 +454,17 @@ function buildDrone(freq: number): PresetBuild {
   octUp.connect(octUpAtten);
   octUpAtten.connect(gain);
 
-  // LFO period 6.5–40s (was ~10–25s). Slow drones now actually drift slowly.
-  // LFO sweep range narrowed: lfoMax 400–800 (was 600–1400). Capping the
-  // peak below 800 Hz keeps saw harmonics from ringing through the filter
-  // when the LFO opens up — that was the "shleyf" the user heard as the
-  // buzzy phase took 5–15 s to subside per LFO cycle.
+  // LFO period 6.5–40s. lfoMax narrowed further: was 400–800, now
+  // 250–450 Hz. With the fundamental switched from saw to triangle,
+  // upper-harmonic content is tiny (3rd at 1/9, 5th at 1/25), so the
+  // filter doesn't need a wide sweep to be perceptible — the LFO is
+  // mostly modulating the low-order partials that ride the body of
+  // the wave. Narrower sweep also means less per-sample biquad
+  // coefficient recomputation, which is gentler on the audio thread
+  // on lower-end machines (a separate but compounding source of
+  // peak-time artifacts).
   const lfoMin = 120 + Math.random() * 160;
-  const lfoMax = 400 + Math.random() * 400;
+  const lfoMax = 250 + Math.random() * 200;
   const lfo = new Tone.LFO({
     frequency: 0.025 + Math.random() * 0.13,
     min: lfoMin,
@@ -980,15 +1008,17 @@ function buildChord(rootFreq: number): PresetBuild {
   // LFO target; outFinal is a normal AudioParam we ramp down on dispose.
   const outDriven = new Tone.Gain(0);
   lp.connect(outDriven);
-  // Breathe period 16–32 s. Peak 0.0448–0.08064 (cumulative: 0.10–0.18
-  // → 0.07–0.126 → 0.056–0.1008 → 0.0448–0.08064). Like buildDrone
-  // above, the chord's internal sum (root + 0.45-0.7×fifth +
-  // 0.25-0.55×oct ≈ 2.25 worst case) gets scaled by the LFO peak to
-  // produce per-instance output. At 0.08064 cap per-instance peak is
-  // ~0.18, well clear of the master limiter even with multiple chords
-  // overlapping at their swell peaks.
+  // Breathe period 16–32 s. Peak 0.0358–0.06451 (cumulative chain:
+  // 0.10–0.18 → 0.07–0.126 → 0.056–0.1008 → 0.0448–0.08064 → 0.0358–
+  // 0.06451). Like buildDrone above, the chord's internal sum (root +
+  // 0.45-0.7×fifth + 0.25-0.55×oct ≈ 2.25 worst case) gets scaled by
+  // the LFO peak to produce per-instance output. The latest -20%
+  // adds defensive headroom for the rare moment when 3 detuned sines
+  // align constructively — the instantaneous peak (3.0×breathePeak ≈
+  // 0.19 at max) is well clear of the limiter, leaving room for the
+  // limiter to catch transients without clamping the steady tone.
   const breathePeriod = 16 + Math.random() * 16;
-  const breathePeak = 0.0448 + Math.random() * 0.03584;
+  const breathePeak = 0.0358 + Math.random() * 0.02867;
   const breathe = new Tone.LFO({
     frequency: 1 / breathePeriod,
     min: 0,
