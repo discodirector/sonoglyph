@@ -515,15 +515,14 @@ function buildDrone(freq: number): PresetBuild {
   osc.start();
   sub.start();
   octUp.start();
-  // Master env target 0.0859 (cumulative chain: 0.16 → 0.112 → 0.0896
-  // → 0.07168 → 0.055 → 0.06875 → 0.0859 with second +25% pass). Once
-  // the click bug was tracked down to HRTF + listener updates and the
-  // mix was clean, we could safely bump the levels back up — the
-  // listener requested two consecutive +25% passes to restore presence
-  // that had been progressively lost during the click hunt. Bell was
-  // excluded from the second pass to keep its strikes from
-  // overpowering the bed.
-  gain.gain.rampTo(0.0859, 4);
+  // Master env target 0.1117 (cumulative chain: 0.16 → 0.112 → 0.0896
+  // → 0.07168 → 0.055 → 0.06875 → 0.0859 → 0.1117 with third volume
+  // pass at +30%). Once the click bug was tracked down to HRTF +
+  // listener updates and the mix was clean, the listener requested
+  // three consecutive volume bumps (+25% / +25% / +30%) to restore
+  // presence that had been progressively lost during the click hunt
+  // — drone is now back above the original pre-cut level.
+  gain.gain.rampTo(0.1117, 4);
 
   return {
     output: gain,
@@ -573,8 +572,8 @@ function buildTexture(freq: number): PresetBuild {
   lfo.connect(bp.frequency);
 
   noise.start();
-  // texture env: 0.09 → 0.1125 → 0.1406 (two consecutive +25% passes).
-  gain.gain.rampTo(0.1406, 5);
+  // texture env: 0.09 → 0.1125 → 0.1406 → 0.1828 (third pass at +30%).
+  gain.gain.rampTo(0.1828, 5);
 
   return {
     output: gain,
@@ -625,14 +624,14 @@ function buildPulse(freq: number): PresetBuild {
     sustain: 0.35 + Math.random() * 0.35, // 0.35–0.7
     release: 1.5 + Math.random() * 1.8,   // 1.5–3.3s
   });
-  // Out gain 0.12 (chain: 0.18 → 0.144 → 0.1152 → 0.144 → 0.18 → 0.12,
-  // last step a manual taste cut). Pulse's repeating attack envelope
-  // means multiple instances can hit on overlapping cycles and stack;
-  // at 0.18 the rhythmic bite was poking out of the mix more than the
-  // listener wanted, so we bring it down a step. Click headroom is
-  // still fine — the actual cause was HRTF + listener updates, not
-  // pulse density.
-  const gain = new Tone.Gain(0.12);
+  // Out gain 0.156 (chain: 0.18 → 0.144 → 0.1152 → 0.144 → 0.18 →
+  // 0.12 → 0.156 with third pass at +30%). Pulse's repeating attack
+  // envelope means multiple instances can hit on overlapping cycles
+  // and stack; we manually cut to 0.12 in the second pass because at
+  // 0.18 the rhythmic bite was poking out, then bumped 30% back up
+  // along with everything else. 0.156 sits a step below pulse's
+  // pre-cut level, keeping its rhythm present without dominating.
+  const gain = new Tone.Gain(0.156);
   osc.connect(filter);
   filter.connect(env);
   env.connect(gain);
@@ -692,8 +691,8 @@ function buildGlitch(freq: number): PresetBuild {
     bp.frequency.cancelScheduledValues(time);
     bp.frequency.setValueAtTime(target, time);
     gain.gain.cancelScheduledValues(time);
-    // glitch peak: 0.16 → 0.20 → 0.25 (two consecutive +25% passes).
-    gain.gain.setValueAtTime(0.25, time);
+    // glitch peak: 0.16 → 0.20 → 0.25 → 0.325 (third pass at +30%).
+    gain.gain.setValueAtTime(0.325, time);
     gain.gain.exponentialRampToValueAtTime(0.001, time + decay);
   }, subdiv).start(0);
   loop.probability = 0.10 + Math.random() * 0.18;
@@ -761,8 +760,8 @@ function buildBreath(freq: number): PresetBuild {
     sustain: 0.35 + Math.random() * 0.3,
     release: 2.0 + Math.random() * 2.5,
   });
-  // breath out gain 0.12 → 0.15 → 0.1875 (two consecutive +25% passes).
-  const out = new Tone.Gain(0.1875);
+  // breath out gain 0.12 → 0.15 → 0.1875 → 0.2438 (third pass at +30%).
+  const out = new Tone.Gain(0.2438);
   sumGain.connect(env);
   env.connect(out);
 
@@ -830,14 +829,15 @@ function buildBell(freq: number): PresetBuild {
     sustain: 0.0,
     release: 1.2 + Math.random() * 1.0,
   });
-  // Out gain 0.1232 (cumulative: 0.22 → 0.154 → 0.1232 → 0.09856 →
-  // 0.1232 with +25% post-click-fix restoration). Bells stand out
-  // because their decay envelope is longer than most layer types —
-  // multiple overlapping bells stack into a sustained chord-of-bells,
-  // but with the mix clean and listener requesting more presence,
-  // we bring bell back up. 0.1232 is the same level we had two cuts
-  // ago, which felt balanced before the click hunt forced it lower.
-  const out = new Tone.Gain(0.1232);
+  // Out gain 0.1602 (cumulative: 0.22 → 0.154 → 0.1232 → 0.09856 →
+  // 0.1232 → 0.1602 with third volume pass at +30%; bell was held
+  // at 0.1232 through the second +25% pass to keep its strikes from
+  // dominating the bed, but is included in this third pass). Bells
+  // stand out because their decay envelope is longer than most layer
+  // types — multiple overlapping bells stack into a sustained
+  // chord-of-bells. With the mix clean and the rest of the bed
+  // pushed up to match, bell goes up too.
+  const out = new Tone.Gain(0.1602);
   osc.connect(env);
   harm.connect(harmGain);
   harmGain.connect(env);
@@ -894,15 +894,15 @@ function buildDrip(freq: number): PresetBuild {
     sustain: 0.0,
     release: 0.2 + Math.random() * 0.25,
   });
-  // Out gain 0.196 (cumulative: 0.28 → 0.196 → 0.1568 → 0.12544 →
-  // 0.1568 → 0.196 with two consecutive +25% passes — back to the
-  // pre-cut level). Drip's transient attack puts most of its energy
-  // in a sub-millisecond peak that the ear reads as "loud"
-  // disproportionate to its RMS, so it sat too prominent originally
-  // — but at 0.196 the staccato bite returns without dominating now
-  // that the master limiter no longer pumps on transient peaks (the
-  // actual click cause turned out to be HRTF, not transients).
-  const out = new Tone.Gain(0.196);
+  // Out gain 0.2548 (cumulative: 0.28 → 0.196 → 0.1568 → 0.12544 →
+  // 0.1568 → 0.196 → 0.2548 with third pass at +30%; now sits a
+  // step ABOVE the original pre-cut level). Drip's transient attack
+  // puts most of its energy in a sub-millisecond peak that the ear
+  // reads as "loud" disproportionate to its RMS, so it sat too
+  // prominent originally — but with the master limiter no longer
+  // pumping on transient peaks (the actual click cause turned out
+  // to be HRTF, not transients), drip can comfortably ride here.
+  const out = new Tone.Gain(0.2548);
   osc.connect(lp);
   lp.connect(env);
   env.connect(out);
@@ -953,12 +953,12 @@ function buildSwell(freq: number): PresetBuild {
   noise.connect(bp);
   bp.connect(gain);
 
-  // Amplitude wave period 6–18s. Peak amplitude 0.1563–0.2813 (chain:
-  // 0.10–0.18 → 0.125–0.225 → 0.1563–0.2813, two consecutive +25%
-  // passes). Same swell can either feel like a slow tide or a quick
-  // gust.
+  // Amplitude wave period 6–18s. Peak amplitude 0.2032–0.3657 (chain:
+  // 0.10–0.18 → 0.125–0.225 → 0.1563–0.2813 → 0.2032–0.3657, three
+  // consecutive volume passes +25%/+25%/+30%). Same swell can either
+  // feel like a slow tide or a quick gust.
   const ampPeriod = 6 + Math.random() * 12;
-  const ampPeak = 0.1563 + Math.random() * 0.125;
+  const ampPeak = 0.2032 + Math.random() * 0.1625;
   const amp = new Tone.LFO({
     frequency: 1 / ampPeriod,
     min: 0,
@@ -1054,15 +1054,17 @@ function buildChord(rootFreq: number): PresetBuild {
   // LFO target; outFinal is a normal AudioParam we ramp down on dispose.
   const outDriven = new Tone.Gain(0);
   lp.connect(outDriven);
-  // Breathe period 16–32 s. Peak 0.056–0.1008 (cumulative chain:
+  // Breathe period 16–32 s. Peak 0.0728–0.131 (cumulative chain:
   // 0.10–0.18 → 0.07–0.126 → 0.056–0.1008 → 0.0448–0.08064 → 0.0358–
-  // 0.06451 → 0.0448–0.0806 → 0.056–0.1008 with two consecutive +25%
-  // passes — landed back on an earlier point in the chain).
-  // Chord's internal sum (root + 0.45-0.7×fifth + 0.25-0.55×oct ≈
-  // 2.25 worst case) scaled by LFO peak: instantaneous peak ~0.227
-  // at max, well clear of any clipping ceiling.
+  // 0.06451 → 0.0448–0.0806 → 0.056–0.1008 → 0.0728–0.131 with three
+  // consecutive volume passes +25%/+25%/+30%; now sits just below
+  // the pre-cut level). Chord's internal sum (root + 0.45-0.7×fifth
+  // + 0.25-0.55×oct ≈ 2.25 worst case) scaled by LFO peak:
+  // instantaneous peak ~0.295 at max, still under the clipping
+  // ceiling but closer than before — limiter restore advisable if
+  // any further bumps happen.
   const breathePeriod = 16 + Math.random() * 16;
-  const breathePeak = 0.056 + Math.random() * 0.0448;
+  const breathePeak = 0.0728 + Math.random() * 0.0582;
   const breathe = new Tone.LFO({
     frequency: 1 / breathePeriod,
     min: 0,
@@ -1438,12 +1440,15 @@ function buildPadVoice(id: PadId, scale: SessionScalePublic): PadVoiceBuild {
 }
 
 /** Per-pad envelope peak. Tuned so 1 pad ≈ tasteful, all 3 ≈ full but
- *  still under the placed-layer mix. Sum of peaks (0.16+0.13+0.18 = 0.47)
- *  × padBus 0.7 ≈ 0.33 peak into master before limiter — leaves headroom. */
+ *  still under the placed-layer mix. Bumped +30% in the third volume
+ *  pass alongside the layer presets so pads kept their relative weight
+ *  in the bed. Sum of peaks (0.208+0.169+0.234 = 0.611) × padBus 0.45
+ *  ≈ 0.275 peak into master — still comfortable headroom even though
+ *  master is now Gain(0.9) rather than a Limiter. */
 const PAD_PEAK: Record<PadId, number> = {
-  glow: 0.16,
-  air: 0.13,
-  deep: 0.18,
+  glow: 0.208, // 0.16 → 0.208 (+30%)
+  air: 0.169,  // 0.13 → 0.169 (+30%)
+  deep: 0.234, // 0.18 → 0.234 (+30%)
 };
 
 /**
