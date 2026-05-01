@@ -16,7 +16,7 @@ import {
 import type { InstancedMesh, Mesh } from 'three';
 import { useEffect, useMemo, useRef } from 'react';
 import { useSession } from '../state/useSession';
-// import { setListenerPosition } from '../audio/engine'; // diagnostic disable
+import { setListenerPosition } from '../audio/engine';
 import { LayerOrb } from './Layer';
 
 /**
@@ -35,6 +35,12 @@ function DescentCamera() {
   const camera = useThree((s) => s.camera);
   const phase = useSession((s) => s.phase);
   const setDepth = useSession((s) => s.setDepth);
+  // Throttle accumulator for setListenerPosition. Audio listener updates
+  // at the full ~60 FPS render rate were the click source we tracked
+  // down — see the diagnostic comment in useFrame below. We now update
+  // at ~10 Hz which is plenty for the slow descent (camera moves only
+  // ~0.28 units per 100 ms) and keeps audio-thread load minimal.
+  const listenerAccum = useRef(0);
 
   useEffect(() => {
     camera.position.set(0, 0, 0);
@@ -57,17 +63,22 @@ function DescentCamera() {
       camera.position.y -= speed * delta;
       setDepth(Math.max(0, -camera.position.y));
     }
-    // DIAGNOSTIC: listener position update disabled. R3F's useFrame
-    // calls this at ~60 FPS, and every call writes to AudioListener
-    // positionX/Y/Z (AudioParams). With Panner3D in HRTF mode, each
-    // listener position change triggers a re-render of the HRTF
-    // convolver — a constant audio-thread load that's roughly
-    // INDEPENDENT of layer count (there's one listener in the graph
-    // regardless), matching the listener's report that clicks don't
-    // scale with how many layers are placed. Combined with switching
-    // Panner3D to equalpower mode in addLayer, this rules HRTF
-    // updates in or out as the click cause.
-    // setListenerPosition(camera.position.x, camera.position.y, camera.position.z);
+    // Listener position update — THROTTLED to ~10 Hz (was 60 FPS via
+    // raw useFrame call, which combined with HRTF panning was the
+    // source of the rare-click bug we tracked across 7+ diagnostic
+    // commits). Switching Panner3D to equalpower (in addLayer) is
+    // the actual fix — HRTF convolver re-renders on every listener
+    // change were the audio-thread load — but throttling here is a
+    // belt-and-suspenders measure: even on equalpower, writing to
+    // AudioListener.positionX/Y/Z six times less often costs nothing
+    // perceptually (camera moves only ~0.28 units per 100 ms during
+    // the descent) and avoids any latent issue with high-rate
+    // AudioParam updates we haven't seen yet.
+    listenerAccum.current += delta;
+    if (listenerAccum.current >= 0.1) {
+      setListenerPosition(camera.position.x, camera.position.y, camera.position.z);
+      listenerAccum.current = 0;
+    }
   });
 
   return null;

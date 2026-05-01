@@ -136,39 +136,15 @@ export async function initAudio(): Promise<void> {
   voiceGain = new Tone.Gain(1.4);
   voiceGain.connect(masterMix);
 
-  // Reverb DISCONNECTED for diagnostic. Listener still hears clicks at
-  // peaks of drone (alone, first sound) and chord (alone, at LFO breath
-  // peak), captured in the WebM recording — so it's a digital-signal
-  // artifact, not playback-side. Bypassing the limiter (previous commit)
-  // didn't fix it. The remaining shared infrastructure on the master
-  // path is: per-type bus, master Gain, masterHpf, masterDuck, masterMix,
-  // and the REVERB SEND PATH.
-  //
-  // Reverb is by far the heaviest single operation — convolution with a
-  // 16-second algorithmic IR via Web Audio's ConvolverNode (essentially
-  // FFT-based fast convolution on a 768k-sample IR). Two ways it could
-  // produce peak-correlated clicks:
-  //   1. Numerical-precision artifacts in the long FFT convolution; output
-  //      amplitude scales with input, so any artifact is largest at peak.
-  //   2. Reverb tail constructively interferes with its own input on
-  //      sustained tones — at the peak of a beating envelope, the tail's
-  //      contribution can momentarily double the signal at certain phase
-  //      relationships, and any tiny non-linearity downstream gets
-  //      amplified there.
-  //
-  // We still create reverb + reverbSend so the rest of the routing graph
-  // is unchanged (typeBuses still .connect(reverbSend) — that just feeds
-  // a node whose output goes nowhere). Reverb still consumes CPU on its
-  // convolution but doesn't contribute to the audible signal.
-  //
-  // If clicks are gone with this disconnect, reverb is the cause and
-  // we'll move to a lighter alternative (shorter decay, freeverb-style
-  // FDN reverb, or a built-from-delays artificial reverb). If clicks
-  // remain, reverb is exonerated and we look at per-preset issues
-  // (Panner3D HRTF artifacts, oscillator startup, etc.).
+  // Reverb — algorithmic 16-second IR via ConvolverNode. Was disconnected
+  // for several diagnostic rounds while we hunted the rare-click bug.
+  // Click cause turned out to be Panner3D in HRTF mode + 60 Hz listener
+  // position updates (each update re-rendered the HRTF convolver), NOT
+  // reverb. Reverb is back online — provides the cathedral-ambient feel
+  // that's central to Sonoglyph's identity.
   reverb = new Tone.Reverb({ decay: 16, wet: 1 });
   await reverb.generate();
-  // reverb.connect(master);  // <-- DIAGNOSTIC: disabled
+  reverb.connect(master);
 
   reverbSend = new Tone.Gain(0.35);
   reverbSend.connect(reverb);
