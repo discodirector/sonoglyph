@@ -61,18 +61,21 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
       </h1>
       {/* Slogan / value-prop tagline. Three-beat rhythm matching the
           three external partners — composition agent (Hermes), final
-          artifact generator (Kimi), settlement chain (Monad). Uses
-          the same #c9885b accent as the instruction labels below so
-          it visually anchors to the rest of the page rather than
-          floating between the title and the italic flavor text. */}
+          artifact generator (Kimi), settlement chain (Monad). Reads
+          as a SUBTITLE under SONOGLYPH: same color (#d8d4cf, the
+          page-default warm off-white) as the title, sized between
+          the 30 px h1 and the 13 px instruction labels so the eye
+          treats it as part of the title block rather than a
+          separate paragraph. */}
       <p
         style={{
           margin: 0,
-          maxWidth: 540,
-          fontSize: 13,
+          maxWidth: 620,
+          fontSize: 18,
           letterSpacing: '0.08em',
-          color: '#c9885b',
+          color: '#d8d4cf',
           lineHeight: 1.5,
+          fontWeight: 300,
         }}
       >
         Compose with Hermes, create with Kimi, own on Monad.
