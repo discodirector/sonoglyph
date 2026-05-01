@@ -23,6 +23,7 @@ import {
   defineChain,
   http,
   isAddress,
+  type Chain,
   type Hex,
   type PublicClient,
   type WalletClient,
@@ -65,8 +66,24 @@ export const SONOGLYPH_ABI = [
   },
 ] as const;
 
-// Monad testnet — chain id 10143. We define it inline because viem doesn't
-// ship a built-in for Monad yet (testnet still in beta as of mid-2026).
+// Two Monad networks defined inline because viem doesn't ship built-ins
+// yet (mainnet launched recently, testnet still ahead of the release
+// cadence). We pick between them at runtime from MONAD_CHAIN_ID.
+const monadMainnet = /*#__PURE__*/ defineChain({
+  id: 143,
+  name: 'Monad',
+  nativeCurrency: {name: 'Monad', symbol: 'MON', decimals: 18},
+  rpcUrls: {
+    default: {http: ['https://rpc.monad.xyz']},
+  },
+  blockExplorers: {
+    default: {
+      name: 'Monad Explorer',
+      url: 'https://monadexplorer.com',
+    },
+  },
+});
+
 const monadTestnet = /*#__PURE__*/ defineChain({
   id: 10143,
   name: 'Monad Testnet',
@@ -76,12 +93,27 @@ const monadTestnet = /*#__PURE__*/ defineChain({
   },
   blockExplorers: {
     default: {
-      name: 'Monad Explorer',
+      name: 'Monad Testnet Explorer',
       url: 'https://testnet.monadexplorer.com',
     },
   },
   testnet: true,
 });
+
+/**
+ * Resolve the active chain from env. If MONAD_CHAIN_ID is set we pick by
+ * id; otherwise default to mainnet (we're past the deploy-on-testnet
+ * phase). Throws on unknown ids so a typo in .env doesn't silently fall
+ * back to a default.
+ */
+function pickChain(): Chain {
+  const raw = process.env.MONAD_CHAIN_ID;
+  if (!raw) return monadMainnet;
+  const id = Number.parseInt(raw, 10);
+  if (id === monadMainnet.id) return monadMainnet;
+  if (id === monadTestnet.id) return monadTestnet;
+  throw new Error(`unknown MONAD_CHAIN_ID: ${raw} (expected 143 or 10143)`);
+}
 
 interface ChainContext {
   publicClient: PublicClient;
@@ -97,8 +129,9 @@ function loadContext(): ChainContext {
 
   const pk = process.env.DEPLOYER_PRIVATE_KEY;
   const contractAddress = process.env.SONOGLYPH_CONTRACT_ADDRESS;
+  const chain = pickChain();
   const rpcUrl =
-    process.env.MONAD_RPC_URL ?? 'https://testnet-rpc.monad.xyz';
+    process.env.MONAD_RPC_URL ?? chain.rpcUrls.default.http[0];
 
   if (!pk) {
     throw new Error('DEPLOYER_PRIVATE_KEY not set');
@@ -115,9 +148,9 @@ function loadContext(): ChainContext {
 
   // RPC url override goes through both clients so tests / forks can swap it.
   const transport = http(rpcUrl);
-  const publicClient = createPublicClient({chain: monadTestnet, transport});
+  const publicClient = createPublicClient({chain, transport});
   const walletClient = createWalletClient({
-    chain: monadTestnet,
+    chain,
     transport,
     account,
   });
@@ -220,7 +253,7 @@ export async function mintSonoglyph(args: MintArgs): Promise<MintResult> {
     blockNumber: receipt.blockNumber,
     gasUsed: receipt.gasUsed,
     contractAddress: ctx.contractAddress,
-    chainId: monadTestnet.id,
+    chainId: ctx.walletClient.chain?.id ?? pickChain().id,
   };
 }
 
@@ -233,13 +266,20 @@ export function chainConfigStatus(): {
   chainId: number;
 } {
   const contractRaw = process.env.SONOGLYPH_CONTRACT_ADDRESS ?? null;
-  const rpcUrl =
-    process.env.MONAD_RPC_URL ?? 'https://testnet-rpc.monad.xyz';
+  // Don't crash on a misconfigured MONAD_CHAIN_ID — /health should still
+  // come up so the operator can see the bad value and fix it.
+  let chain;
+  try {
+    chain = pickChain();
+  } catch {
+    chain = monadMainnet;
+  }
+  const rpcUrl = process.env.MONAD_RPC_URL ?? chain.rpcUrls.default.http[0];
   return {
     hasPrivateKey: Boolean(process.env.DEPLOYER_PRIVATE_KEY),
     hasContract: Boolean(contractRaw && isAddress(contractRaw)),
     contractAddress: contractRaw,
     rpcUrl,
-    chainId: monadTestnet.id,
+    chainId: chain.id,
   };
 }

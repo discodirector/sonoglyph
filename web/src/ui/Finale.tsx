@@ -420,22 +420,20 @@ function MintSuccess({
   contractAddress: string | null;
   chainId: number | null;
 }) {
-  // Two Monad testnet explorers in active rotation:
+  // Two Monad explorers in active rotation:
   //   - monadexplorer.com — standard tx / address pages, works well for tx
   //     receipts with internal calls and event logs
   //   - monadvision.com   — has a dedicated /nft/<contract>/<tokenId> route
   //     that renders the metadata, image, and animation_url playback
   //     (which is what we want users to land on for the audio/glyph view)
   // We split the targets accordingly: tx link → explorer, NFT link → vision.
-  // Both treat chainId 10143 as the canonical testnet; we keep the chainId
-  // guard around so this gracefully degrades when we eventually deploy to
-  // mainnet (which gets its own host pair).
-  const isTestnet = chainId === 10143;
-  const txExplorer = isTestnet
-    ? 'https://testnet.monadexplorer.com'
+  // Mainnet (143) drops the `testnet.` subdomain on both hosts.
+  const isMainnet = chainId === 143;
+  const txExplorer = isMainnet
+    ? 'https://monadexplorer.com'
     : 'https://testnet.monadexplorer.com';
-  const nftExplorer = isTestnet
-    ? 'https://testnet.monadvision.com'
+  const nftExplorer = isMainnet
+    ? 'https://monadvision.com'
     : 'https://testnet.monadvision.com';
   const txUrl = `${txExplorer}/tx/${txHash}`;
   const tokenUrl =
