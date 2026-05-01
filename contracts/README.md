@@ -6,13 +6,25 @@ ERC-721 of completed Sonoglyph descents. Fully on-chain rendering of glyph
 
 ## Deployed
 
-| Network        | Chain ID | Address |
-|----------------|----------|---------|
-| **Monad mainnet** _(production)_ | 143    | [`0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931`](https://monadexplorer.com/address/0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931) |
-| Monad testnet _(development)_   | 10143  | [`0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931`](https://testnet.monadexplorer.com/address/0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931) |
+| Network        | Chain ID | Address | Format |
+|----------------|----------|---------|--------|
+| **Monad mainnet** _(production)_ | 143    | [`0x17aA406cc810f7c5E66c41e763c0eF5333AecAc2`](https://monadexplorer.com/address/0x17aA406cc810f7c5E66c41e763c0eF5333AecAc2) | HTML `animation_url` |
+| Monad testnet _(development)_   | 10143  | [`0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931`](https://testnet.monadexplorer.com/address/0x809a2dE0a24537a5BAb8a3E5Ead2d648a16Aa931) | `ipfs://` `animation_url` (v0) |
 
-The address is identical on both networks — same deployer, same nonce 0,
-so `CREATE` lands on the same `keccak(rlp(sender, nonce))[12:]`.
+Mainnet was redeployed at deployer-nonce 2 (after the v0 mainnet deploy
+at nonce 0 + first mint at nonce 1) so the new mainnet address differs
+from testnet. v0 token #1 at the old mainnet address remains as a
+historical artifact.
+
+The two contracts differ only in `tokenURI`'s `animation_url` field:
+- v0 (`ipfs://<audioCid>`) → marketplace falls back to its built-in audio
+  player; the glyph appears only as a thumbnail.
+- v1 (`data:text/html;base64,<page>`) → marketplace renders a self-contained
+  page that shows the glyph AND plays the audio together. See
+  `_renderHtml` in `src/Sonoglyph.sol`.
+
+Mint storage layout is identical, so nothing else (bridge, frontend) had
+to change beyond the `SONOGLYPH_CONTRACT_ADDRESS` env update.
 
 Owner / sole minter: `0x331d5F69d188b1A37B0b1D6dd058f76b52e4457b` — the
 bridge wallet, used by `proxy/` to sign mint transactions on the player's
