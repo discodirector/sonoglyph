@@ -303,6 +303,16 @@ function AutomaticTab({
             Hermes.
           </div>
           <CommandBlock body={HERMES_FIX_PROMPT} scrollable />
+          <div>
+            <strong style={{ color: '#d8d4cf' }}>3.</strong> Close the chat
+            and exit back to the terminal.
+          </div>
+          <div>
+            <strong style={{ color: '#d8d4cf' }}>4.</strong> Go back to{' '}
+            <strong style={{ color: '#c9885b' }}>STEP 1</strong> at the top
+            of this page and run the setup command again — the patched
+            Hermes will now prompt you correctly.
+          </div>
         </div>
       </details>
     </div>
