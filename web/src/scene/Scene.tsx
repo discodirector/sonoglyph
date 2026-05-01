@@ -16,7 +16,7 @@ import {
 import type { InstancedMesh, Mesh } from 'three';
 import { useEffect, useMemo, useRef } from 'react';
 import { useSession } from '../state/useSession';
-import { setListenerPosition } from '../audio/engine';
+// import { setListenerPosition } from '../audio/engine'; // diagnostic disable
 import { LayerOrb } from './Layer';
 
 /**
@@ -57,8 +57,17 @@ function DescentCamera() {
       camera.position.y -= speed * delta;
       setDepth(Math.max(0, -camera.position.y));
     }
-    // Listener follows the camera so 3D-panned layers feel located in space.
-    setListenerPosition(camera.position.x, camera.position.y, camera.position.z);
+    // DIAGNOSTIC: listener position update disabled. R3F's useFrame
+    // calls this at ~60 FPS, and every call writes to AudioListener
+    // positionX/Y/Z (AudioParams). With Panner3D in HRTF mode, each
+    // listener position change triggers a re-render of the HRTF
+    // convolver — a constant audio-thread load that's roughly
+    // INDEPENDENT of layer count (there's one listener in the graph
+    // regardless), matching the listener's report that clicks don't
+    // scale with how many layers are placed. Combined with switching
+    // Panner3D to equalpower mode in addLayer, this rules HRTF
+    // updates in or out as the click cause.
+    // setListenerPosition(camera.position.x, camera.position.y, camera.position.z);
   });
 
   return null;

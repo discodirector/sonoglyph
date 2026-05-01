@@ -1555,7 +1555,16 @@ export function addLayer(
     rolloffFactor: 0.4,
     refDistance: 6,
     maxDistance: 120,
-    panningModel: 'HRTF',
+    // DIAGNOSTIC: equalpower instead of HRTF. HRTF panning convolves
+    // the signal with head-related impulse responses on the audio
+    // thread; equalpower is a simple stereo-gain ratio based on
+    // position with no convolution. If clicks are caused by HRTF
+    // convolver state churn (especially combined with frequent
+    // listener-position updates from the camera descent), switching
+    // to equalpower will fix them. Tradeoff: 3D positioning sounds
+    // less precise, more like simple stereo panning. We can revert
+    // to HRTF if it turns out not to be the cause.
+    panningModel: 'equalpower',
   });
 
   preset.output.connect(panner);
