@@ -157,15 +157,27 @@ export function freqAt(
  * Returning an array lets the picker randomize within the type's home
  * range so two drones in the same descent aren't necessarily the same
  * octave.
+ *
+ * Drone and chord are pinned to a single octave on purpose. The earlier
+ * two-octave ranges ([1,2] and [2,3]) let scale + leading-tone
+ * combinations push drone up to ~233 Hz fundamental and chord up to ~466
+ * Hz — at those pitches the drone's saw harmonics ring through the LP
+ * filter sweep (with Q resonance making the upper harmonics buzz), and
+ * the chord's octave voice (root × 2) reaches ~933 Hz where it stops
+ * blending and starts cutting. Pinning drone to oct 1 keeps the
+ * fundamental at 33–93 Hz (root or fifth only — see pickFreqForLayer),
+ * and chord to oct 2 keeps root at 65–233 Hz with the octave voice
+ * still under 470 Hz — both back inside the "harmonic floor / mid pad"
+ * identities the engine expects.
  */
 function preferredOctaves(type: LayerType): number[] {
   switch (type) {
     case 'drone':
-      return [1, 2];
+      return [1];
     case 'pulse':
       return [2, 3];
     case 'chord':
-      return [2, 3]; // chord build adds 5 + octave on top inside the engine
+      return [2]; // chord build adds 5 + octave on top inside the engine
     case 'breath':
       return [3, 4];
     case 'bell':
@@ -237,6 +249,13 @@ function pickDegreeForIntent(
  *
  * `hush` is special-cased to the lowest available octave for the type with
  * the root note — useful for the agent to anchor a quiet section.
+ *
+ * `drone` ignores intent entirely and is pinned to root or fifth. Drone's
+ * job is to anchor the descent's harmonic floor; tension/color/emphasis on
+ * a 33 Hz sub doesn't read musically, and letting drone wander up the
+ * scale loses its identity (and pushes saw harmonics into unpleasant
+ * resonance bands). Intent still drives the other 8 layer types where
+ * pitch motion is a feature, not a bug.
  */
 export function pickFreqForLayer(
   scale: SessionScale,
@@ -247,6 +266,13 @@ export function pickFreqForLayer(
   const octs = preferredOctaves(type);
   if (intent === 'hush') {
     return freqAt(scale, octs[0], 0);
+  }
+  if (type === 'drone') {
+    const fifthDeg = scale.intervals.indexOf(7);
+    const droneDegrees = fifthDeg >= 0 ? [0, fifthDeg] : [0];
+    const oct = octs[Math.floor(rng() * octs.length)];
+    const deg = droneDegrees[Math.floor(rng() * droneDegrees.length)];
+    return freqAt(scale, oct, deg);
   }
   const oct = octs[Math.floor(rng() * octs.length)];
   const deg = pickDegreeForIntent(scale, intent, rng);
