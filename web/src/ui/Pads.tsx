@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PAD_IDS, PAD_LABELS, useSession, type PadId } from '../state/useSession';
 import { startPad, stopPad } from '../audio/engine';
 
@@ -54,7 +54,48 @@ export function Pads() {
   const scale = useSession((s) => s.scale);
   const padsActive = useSession((s) => s.padsActive);
   const setPadActive = useSession((s) => s.setPadActive);
-  const [open, setOpen] = useState(false);
+  // Panel starts OPEN — same reasoning as Mixer: first-time players
+  // were missing the pads entirely because they were hidden behind
+  // a button. They can still collapse the panel via the toggle.
+  const [open, setOpen] = useState(true);
+
+  // Onboarding hint that points at the pads panel ~20 s into the
+  // descent if the player hasn't engaged any pad yet. Three pieces
+  // of state because the lifecycle has three distinct events:
+  //   - hintArmed: 20 s timer fired, hint is allowed to render
+  //   - hintDismissed: player engaged a pad OR the hint timed out
+  //                    after being visible — either way we never
+  //                    show it again this session
+  //   - the actual visibility derived from open && armed && !dismissed
+  // We also track whether the panel was ever closed; if the player
+  // closed it before 20 s elapsed they've clearly already discovered
+  // the pads and don't need the nudge.
+  const [hintArmed, setHintArmed] = useState(false);
+  const [hintDismissed, setHintDismissed] = useState(false);
+
+  // 20 s arming timer — kicks off when phase enters 'playing'.
+  useEffect(() => {
+    if (phase !== 'playing') return;
+    const t = window.setTimeout(() => setHintArmed(true), 20_000);
+    return () => window.clearTimeout(t);
+  }, [phase]);
+
+  // Auto-dismiss after the hint has been visible for ~15 s. We don't
+  // want it to linger forever if the player is busy with placement;
+  // the arrow has done its job by then.
+  useEffect(() => {
+    if (!hintArmed || hintDismissed) return;
+    const t = window.setTimeout(() => setHintDismissed(true), 15_000);
+    return () => window.clearTimeout(t);
+  }, [hintArmed, hintDismissed]);
+
+  // Engaging any pad dismisses the hint immediately — the player
+  // has clearly understood the prompt, no need for the arrow to
+  // keep pointing.
+  useEffect(() => {
+    const anyActive = Object.values(padsActive).some(Boolean);
+    if (anyActive) setHintDismissed(true);
+  }, [padsActive]);
 
   if (phase !== 'playing') return null;
 
@@ -62,6 +103,11 @@ export function Pads() {
   // scale arrives in the first state snapshot, well before the player
   // clicks Begin, so this guard only really fires on dev hot-reload.
   const ready = scale !== null;
+
+  // Hint is gated on `open` — if the panel is already collapsed when
+  // the timer fires, the player has actively dismissed pads and a
+  // hand-drawn arrow into empty space would just look weird.
+  const showHint = open && hintArmed && !hintDismissed;
 
   const togglePad = (id: PadId) => {
     if (!ready || !scale) return;
@@ -159,7 +205,105 @@ export function Pads() {
           ▲
         </span>
       </button>
+
+      <PadsHint visible={showHint} />
     </>
+  );
+}
+
+/**
+ * One-shot onboarding hint that nudges the player toward the pads ~20 s
+ * into the descent. Two animations stage the entrance:
+ *
+ *   1. Container fades in + slides 20 px to the left (700 ms).
+ *   2. After a 200 ms hold, the arrow's stroke-dashoffset animates
+ *      from full-length (invisible) to zero, "drawing" the arrow
+ *      across 1.1 s. The arrowhead fades in last on a 300 ms tail
+ *      so it caps the drawn line cleanly instead of appearing
+ *      mid-stroke.
+ *
+ * pointerEvents: 'none' on the container — the hint is purely
+ * decorative and must not eat clicks meant for the panel behind /
+ * around it.
+ */
+function PadsHint({ visible }: { visible: boolean }) {
+  const [drawn, setDrawn] = useState(false);
+  useEffect(() => {
+    if (!visible) {
+      setDrawn(false);
+      return;
+    }
+    const t = window.setTimeout(() => setDrawn(true), 200);
+    return () => window.clearTimeout(t);
+  }, [visible]);
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        // Pads panel sits at right: 24, width ≈ 274 px (3 × 86 + 2 × 8).
+        // Right edge of panel from viewport right = 24, so left edge
+        // sits at 298. Hint anchored at right: 320 leaves a ~22 px gap
+        // — enough breathing room for the arrowhead to land cleanly
+        // on the panel's outer border without crowding it.
+        right: 320,
+        bottom: 110,
+        zIndex: 19,
+        pointerEvents: 'none',
+        opacity: visible ? 1 : 0,
+        transform: visible ? 'translateX(0)' : 'translateX(20px)',
+        transition: 'opacity 700ms ease, transform 700ms ease',
+        maxWidth: 240,
+        textAlign: 'right',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 12,
+          lineHeight: 1.5,
+          color: '#c9885b',
+          letterSpacing: '0.04em',
+          fontStyle: 'italic',
+          marginBottom: 6,
+        }}
+      >
+        Play with the pads — turn one on for a few seconds, then another.
+      </div>
+      <svg
+        width="180"
+        height="50"
+        viewBox="0 0 180 50"
+        style={{ display: 'block', marginLeft: 'auto' }}
+        aria-hidden="true"
+      >
+        {/* Curved shaft. strokeDasharray ≈ path length so dashoffset
+            transitions cover the full draw distance; values larger
+            than the actual length are fine (the path just stays
+            invisible past offset=length). */}
+        <path
+          d="M 5 10 C 60 10, 100 38, 168 38"
+          stroke="#c9885b"
+          strokeWidth="1.5"
+          fill="none"
+          strokeLinecap="round"
+          strokeDasharray="220"
+          strokeDashoffset={drawn ? 0 : 220}
+          style={{ transition: 'stroke-dashoffset 1100ms ease' }}
+        />
+        {/* Arrowhead — two short strokes meeting at the shaft's tip.
+            Faded in after the shaft finishes drawing so it reads as
+            "the line landed and the head pointed". */}
+        <path
+          d="M 168 38 L 158 32 M 168 38 L 158 44"
+          stroke="#c9885b"
+          strokeWidth="1.5"
+          fill="none"
+          strokeLinecap="round"
+          opacity={drawn ? 1 : 0}
+          style={{ transition: 'opacity 300ms ease 1000ms' }}
+        />
+      </svg>
+    </div>
   );
 }
 

@@ -4,9 +4,11 @@ import type { LayerType } from '../state/useSession';
 import { setLayerVolume } from '../audio/engine';
 
 /**
- * Volume mixer — collapsed by default, opens above a "MIXER" toggle button
- * in the bottom-left corner. Panel appears above the cooldown bar so it
- * doesn't cover the preset palette underneath.
+ * Volume mixer — open by default at the start of a descent so the player
+ * sees the controls immediately (they had been hiding behind a button
+ * which made first-time players miss them entirely). The toggle still
+ * works, so anyone who finds the panel distracting can collapse it.
+ * Sits above the cooldown bar so it doesn't cover the preset palette.
  *
  * Visually deliberately quiet: two grays, no border. Colour info is already
  * carried by the orbs and the bottom palette, so the mixer doesn't need to
@@ -51,7 +53,11 @@ export function Mixer() {
   const phase = useSession((s) => s.phase);
   const volumes = useSession((s) => s.layerVolumes);
   const setVol = useSession((s) => s.setLayerVolume);
-  const [open, setOpen] = useState(false);
+  // Panel starts OPEN so first-time players see the faders without
+  // having to hunt for the toggle. They can still collapse it via the
+  // bottom-left "MIXER" button — local state means the choice persists
+  // across re-renders within the session but resets on reload.
+  const [open, setOpen] = useState(true);
 
   if (phase !== 'playing') return null;
 
