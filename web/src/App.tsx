@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Scene } from './scene/Scene';
 import { Hud } from './ui/Hud';
 import { Mixer } from './ui/Mixer';
 import { Pads } from './ui/Pads';
 import { Intro } from './ui/Intro';
+import { Onboarding } from './ui/Onboarding';
 import { Finale } from './ui/Finale';
 import { LAYER_TYPES, useSession } from './state/useSession';
 import {
@@ -54,6 +55,13 @@ export function App() {
 
   const bridgeRef = useRef<BridgeConnection | null>(null);
   const layerHandlesRef = useRef<Map<string, () => void>>(new Map());
+  // Onboarding gate: BEGIN unlocks audio + recording (user-gesture
+  // requirement), but the descent itself doesn't kick off until the
+  // player reads the rules and hits Enter. We hold this client-side
+  // rather than expanding the server-mirrored phase machine because
+  // it's purely a presentation pause — the server doesn't care about
+  // this step and shouldn't have to.
+  const [showOnboarding, setShowOnboarding] = useState(false);
   // Guards against re-firing if React replays the effect (e.g. after an
   // applySnapshot that re-asserts the already-final layer count, or HMR
   // in dev). Once we've armed the outro, that's it.
@@ -277,6 +285,11 @@ export function App() {
 
   const handleBegin = async () => {
     if (!agentConnected) return;
+    // initAudio MUST run inside this user-gesture callback — Web Audio
+    // requires a click/tap to unlock the AudioContext. Same for
+    // MediaRecorder; deferring either to the post-onboarding Enter
+    // press would mean the keyboard event ends up handling them, and
+    // browsers count keyboard as gesture only inconsistently.
     await initAudio();
     // Recording starts immediately — turned out the rare-click bug we
     // hunted across several rounds was Panner3D HRTF + listener-position
@@ -284,6 +297,15 @@ export function App() {
     // for one diagnostic round but is now back to its original behavior.
     startRecording();
     setRecording(true);
+    // Hand off to the onboarding screen. beginLocal() and the `hello`
+    // dispatch are deferred to handleStartDescent below so the
+    // descent doesn't start advancing while the player is still
+    // reading the rules.
+    setShowOnboarding(true);
+  };
+
+  const handleStartDescent = () => {
+    setShowOnboarding(false);
     beginLocal();
     bridgeRef.current?.send({ type: 'hello' });
   };
@@ -291,7 +313,11 @@ export function App() {
   return (
     <>
       <Scene onPlace={handlePlace} />
-      {phase === 'intro' && <Intro onBegin={handleBegin} />}
+      {/* Intro hides as soon as onboarding takes over — phase is still
+          'intro' at this point because beginLocal() hasn't run yet,
+          but visually the player has already crossed that threshold. */}
+      {phase === 'intro' && !showOnboarding && <Intro onBegin={handleBegin} />}
+      {showOnboarding && <Onboarding onContinue={handleStartDescent} />}
       {phase === 'playing' && <Hud />}
       {phase === 'playing' && <Mixer />}
       {phase === 'playing' && <Pads />}
