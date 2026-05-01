@@ -14,9 +14,16 @@
 # the path lists. Without `handle`, Caddy's default directive ordering
 # would let `try_files` intercept /health and /mcp before the proxy.
 #
+# Static root points directly at /srv/sonoglyph/web/dist (the vite build
+# output). This means `npm run build` is the entire frontend deploy —
+# no rsync to /var/www needed. The dirs are world-traversable so the
+# `caddy` user can read through.
+#
 # Deploy:
 #   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
 #   sudo systemctl reload caddy
+# Or just run `deploy/redeploy.sh` which handles Caddyfile sync + bridge
+# restart + web rebuild + health check.
 
 sonoglyph.xyz, www.sonoglyph.xyz {
 	encode zstd gzip
@@ -52,7 +59,7 @@ sonoglyph.xyz, www.sonoglyph.xyz {
 	}
 
 	handle {
-		root * /var/www/sonoglyph
+		root * /srv/sonoglyph/web/dist
 		try_files {path} /index.html
 		file_server
 	}
