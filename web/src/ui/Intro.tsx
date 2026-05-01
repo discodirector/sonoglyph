@@ -353,7 +353,7 @@ function ManualTab({ code, prompt }: { code: string; prompt: string }) {
       <Step number={2} title="Configure the MCP server">
         <SubStep label="Option A — You don't have any MCP servers yet">
           <p style={stepText}>
-            Run this command to create the config file and add Sonoglyph:
+            Add the Sonoglyph MCP to your config file:
           </p>
           <CommandBlock body={writeConfig} />
         </SubStep>
