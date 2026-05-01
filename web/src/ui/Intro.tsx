@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useSession } from '../state/useSession';
+import { HERMES_FIX_PROMPT } from './hermesFixPrompt';
 
 /**
  * Intro / pairing screen.
@@ -62,7 +63,6 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
       ) : (
         <PairingPanel
           command={pairing.hermesCommand}
-          addCommand={pairing.hermesAddCommand}
           prompt={pairing.hermesPrompt}
           code={pairing.code}
         />
@@ -106,12 +106,10 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
 // -----------------------------------------------------------------------------
 function PairingPanel({
   command,
-  addCommand,
   prompt,
   code,
 }: {
   command: string;
-  addCommand: string;
   prompt: string;
   code: string;
 }) {
@@ -150,7 +148,7 @@ function PairingPanel({
       />
       <div
         style={{
-          fontSize: 10,
+          fontSize: 11,
           letterSpacing: '0.2em',
           color: '#6a6660',
           textAlign: 'center',
@@ -158,16 +156,16 @@ function PairingPanel({
           lineHeight: 1.7,
         }}
       >
-        KEEP THE TERMINAL OPEN throughout the game.
+        KEEP THE TERMINAL OPEN THROUGHOUT THE GAME.
         <br />
-        Once the AGENT PAIRED light is on, hit Begin and place your first layer.
+        ONCE THE AGENT PAIRED LIGHT IS ON, HIT BEGIN AND PLACE YOUR FIRST LAYER.
       </div>
 
       <details
         style={{
           width: '100%',
           maxWidth: 720,
-          fontSize: 10,
+          fontSize: 11,
           letterSpacing: '0.2em',
           color: '#6a6660',
           textAlign: 'left',
@@ -197,11 +195,13 @@ function PairingPanel({
           </div>
           <CommandBlock body="hermes update" />
           <div>
-            <strong style={{ color: '#d8d4cf' }}>2.</strong> In your Hermes
-            chat, paste the command below and ask why it doesn't work —
-            Hermes will find the problem and fix itself:
+            <strong style={{ color: '#d8d4cf' }}>2.</strong> If the update
+            didn't fix it, hand this prompt to your Hermes agent so it can
+            patch the bug. The changes are safe — they target the bug
+            specifically and were authored by the Sonoglyph developer's own
+            Hermes.
           </div>
-          <CommandBlock body={addCommand} />
+          <CommandBlock body={HERMES_FIX_PROMPT} />
         </div>
       </details>
     </div>
