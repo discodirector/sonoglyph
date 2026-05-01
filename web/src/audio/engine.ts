@@ -31,9 +31,37 @@ import type { SessionScalePublic } from '../net/protocol';
 // -----------------------------------------------------------------------------
 
 let initialized = false;
-let master: Tone.Limiter;
 /**
- * Subsonic high-pass — sits in series between `master` (Limiter) and
+ * Master sum point — was `Tone.Limiter(-1)` through Day 6. Listener
+ * reported persistent peak-time clicks audible BOTH in playback and
+ * in the recording (recorder taps masterMix downstream of `master`,
+ * so any click captured at masterMix is in the digital signal —
+ * rules out speakers/drivers/system-audio-thread).
+ *
+ * Diagnostic suspicion: Tone.Limiter wraps Web Audio's
+ * DynamicsCompressorNode, which applies a small amount of look-ahead
+ * (~6 ms in Chrome) and RMS-smoothing even on signals well below
+ * threshold. On signals with strong slow beating (drone's ±25 cent
+ * detune between fund and its octave-related sub/octUp gives ~1–3 Hz
+ * amplitude modulation; chord's three slightly-detuned sines also
+ * beat slowly), the RMS detector can twitch at the slow envelope's
+ * peaks and produce subtle compression-curve discontinuities — heard
+ * as clicks correlating with the perceived "peak" of the sound.
+ * Math says our signal (max ~0.2 instantaneous) is well below the
+ * -1 dBFS threshold (0.89) so the compressor should be transparent,
+ * but DCN's actual behavior at low signal levels isn't fully
+ * transparent in practice.
+ *
+ * Replacing with a static Gain(0.9): same ~-1 dB headroom via pure
+ * attenuation, NO compression / RMS / look-ahead / threshold logic.
+ * If this kills the click we'll add back a softer compressor (slow
+ * attack, soft knee) as the safety net for the rare extreme
+ * stack-up case. If clicks persist, the cause is upstream of master
+ * (reverb chain, layer presets) and we move the diagnostic there.
+ */
+let master: Tone.Gain;
+/**
+ * Subsonic high-pass — sits in series between `master` and
  * `masterDuck`. Cuts everything below ~40 Hz before it reaches the
  * destination + recorder.
  *
@@ -95,12 +123,18 @@ export async function initAudio(): Promise<void> {
   masterMix = new Tone.Gain(1).toDestination();
 
   // Layers route: master → masterHpf → masterDuck → masterMix.
-  // HPF sits AFTER the limiter on purpose — limiter clamps based on the
-  // pre-filter signal (subsonics included), but those subsonics never
-  // reach the speakers because the HPF strips them on the way out. The
-  // limiter doesn't pump audibly on sub-40 Hz content because the fast
-  // attack (5 ms) is well below sub-frequency periods (>25 ms at 40 Hz).
-  master = new Tone.Limiter(-1);
+  //
+  // master is now a static Gain(0.9) — was Tone.Limiter(-1). See the
+  // long comment on the `master` declaration above for the diagnostic
+  // rationale. The 0.9 multiplier gives ~-1 dB headroom (matching the
+  // limiter's old threshold position) via pure attenuation, no
+  // compression. If our signal ever exceeds 1.0 amplitude in the
+  // worst-case stack-up, it'll digitally clip at the destination
+  // rather than getting smoothly limited — but our cumulative volume
+  // cuts have brought peak signal levels well under that ceiling
+  // even with all 9 layer types + 3 pads engaged + reverb at max
+  // depth, so clipping is theoretical not practical.
+  master = new Tone.Gain(0.9);
   masterHpf = new Tone.Filter({ frequency: 40, type: 'highpass', Q: 0.707 });
   masterDuck = new Tone.Gain(1);
   master.connect(masterHpf);
