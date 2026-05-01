@@ -241,13 +241,22 @@ function PadsHint({ visible }: { visible: boolean }) {
     <div
       style={{
         position: 'fixed',
-        // Pads panel sits at right: 24, width ≈ 274 px (3 × 86 + 2 × 8).
-        // Right edge of panel from viewport right = 24, so left edge
-        // sits at 298. Hint anchored at right: 320 leaves a ~22 px gap
-        // — enough breathing room for the arrowhead to land cleanly
-        // on the panel's outer border without crowding it.
-        right: 320,
-        bottom: 110,
+        // Pads panel geometry (from the panel <div> style above):
+        //   right: 24, bottom: 90, width ≈ 274 px (3 × 86 + 2 × 8),
+        //   height ≈ 149 px (10 top-pad + 13 label + 8 gap + 110
+        //   cell + 8 bottom-pad). So:
+        //     panel top-LEFT corner ≈ (right: 298, bottom: 239).
+        //
+        // Hint anchored at (right: 290, bottom: 230) puts the SVG
+        // arrow tip — at SVG-coords (168, 38) within a 180×50
+        // canvas — at viewport (right: 302, bottom: 242). That's
+        // ~4 px left and ~3 px above the panel's top-left corner,
+        // which reads as "pointing AT the corner" (approaching from
+        // upper-left, stopping just shy) rather than "stabbing
+        // into the middle of the panel" which is what the previous
+        // bottom: 110 produced.
+        right: 290,
+        bottom: 230,
         zIndex: 19,
         pointerEvents: 'none',
         opacity: visible ? 1 : 0,
