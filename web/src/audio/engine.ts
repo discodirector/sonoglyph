@@ -389,10 +389,56 @@ interface PresetBuild {
 // resonances so two layers of the same type at the same pitch still sound
 // distinguishably different.
 
+// -----------------------------------------------------------------------------
+// Drone timbre profiles — picked uniformly per buildDrone() call.
+//
+// Why per-instance variation: the user's complaint — "дрон тянется
+// бесконечно и скучно через весь трек" — was really about uniformity
+// across the descent. Three drones placed = three identical voices
+// stacked. Selecting a profile at construction means three drones now
+// sound like three different drones in the same key, not three layered
+// copies of the same patch.
+//
+// All four profiles preserve the no-resonance constraint (Q=0.5
+// everywhere, never sweeps) so the click-bug history that motivated
+// the static-filter rewrite (see buildDrone for the full chain) is
+// still respected: cutoff varies BETWEEN drones, never WITHIN one.
+//
+// Naming reads as a description of where the drone sits sonically.
+// 'body' is the original pre-profile mix, kept verbatim so the volume
+// chain calibration still has its anchor reference.
+// -----------------------------------------------------------------------------
+
+type DroneProfile = {
+  name: 'deep' | 'body' | 'airy' | 'hollow';
+  oscGain: number; // fundamental triangle pre-mix gain
+  subGain: number; // sub sine attenuation
+  octUpGain: number; // octave-up triangle attenuation
+  cutoff: number; // LP cutoff Hz (Q stays 0.5 across all profiles)
+};
+
+const DRONE_PROFILES: DroneProfile[] = [
+  // Bass-tilted: sub up, octUp barely there, dark cutoff. "Cave floor".
+  { name: 'deep', oscGain: 1.0, subGain: 0.7, octUpGain: 0.15, cutoff: 350 },
+  // The original pre-profile balance. Volume calibration is anchored here.
+  { name: 'body', oscGain: 1.0, subGain: 0.5, octUpGain: 0.25, cutoff: 500 },
+  // Mid-scooped, octUp dominant. "Shimmer over the floor".
+  { name: 'airy', oscGain: 0.85, subGain: 0.3, octUpGain: 0.4, cutoff: 900 },
+  // Hollowed-mid, both ends present, fundamental sits back. "Distant low note".
+  { name: 'hollow', oscGain: 0.5, subGain: 0.5, octUpGain: 0.4, cutoff: 600 },
+];
+
 function buildDrone(freq: number): PresetBuild {
+  // Profile picked uniformly per instance. Multiple drones in the same
+  // descent get distinct timbres rather than rendering as layered copies.
+  const profile =
+    DRONE_PROFILES[Math.floor(Math.random() * DRONE_PROFILES.length)];
+
   // ±25 cents of detune (was ±7) — wide enough to actually hear beating
   // between the saw and the sub, and so two drones at the same pitch in
-  // the same descent don't lock onto identical phase.
+  // the same descent don't lock onto identical phase. This is the INITIAL
+  // offset; the oscDetuneLfo further down drifts ±10 c around it so the
+  // detune is no longer a one-shot value set at construction.
   const detune = (Math.random() - 0.5) * 50;
   // Fundamental wave: triangle, NOT sawtooth (was sawtooth through Day 6).
   //
@@ -428,109 +474,160 @@ function buildDrone(freq: number): PresetBuild {
   // the true sub-octave.
   const subFreq = freq / 2 < 30 ? freq : freq / 2;
   const sub = new Tone.Oscillator({ frequency: subFreq, type: 'sine' });
-  // Sub attenuation — was 1.0 (sub at full level alongside the saw).
-  // At full level the sub voice was the dominant bass contributor in
-  // the descent: even though drone's overall env is at 0.07168, the
-  // sub sine at 33–93 Hz reproduces flat through the LP filter (which
-  // sits at 220–450 Hz centre, well above sub frequencies), so it hit
-  // the bus at full strength. With multiple drones engaged plus chord
-  // and DEEP pad, cumulative sub-band energy was driving the limiter
-  // hard enough to crackle. 0.5 (-6 dB) keeps the sub's body but
-  // halves its contribution to the bass mass; combined with the
-  // master HPF at 40 Hz (which clips the bottom 1/3 of sub's range
-  // when freq=65 Hz), drone's sub energy is now ~40% of what it was.
-  const subAtten = new Tone.Gain(0.5);
+  // Sub attenuation — was a flat 0.5 across all instances. Now drawn from
+  // the profile (0.3 / 0.5 / 0.5 / 0.7) so 'deep' anchors heavier on the
+  // sub while 'airy' lifts off it. The original 0.5 is preserved by the
+  // 'body' profile so the headroom math (master HPF at 40 Hz, sub-band
+  // contribution to limiter, etc.) still has its calibration anchor.
+  const subAtten = new Tone.Gain(profile.subGain);
   // Octave-up triangle voice — bypasses the LP filter so it provides
-  // constant audible body even when the LFO closes the cutoff. The
-  // saw fundamental sits at 65–185 Hz now (drone moved from oct 1 to
-  // oct 2; see proxy/src/theory.ts for why), so it's reproducible on
-  // most playback systems — but octUp at 130–370 Hz still adds a clean
-  // mid-band presence that the LFO can't sweep away. Triangle's 1/n²
-  // harmonic falloff keeps it gentle even unfiltered.
+  // audible body even with the filter relatively closed. The fundamental
+  // sits at 65–185 Hz, so octUp at 130–370 Hz adds a clean mid-band
+  // presence. Triangle's 1/n² harmonic falloff keeps it gentle unfiltered.
   const octUp = new Tone.Oscillator({ frequency: freq * 2, type: 'triangle' });
 
-  // Sources: saw + sub merge here, then go through the swept LP. octUp
-  // routes around the filter and joins back at the final env (`gain`).
+  // NEW (per-profile): osc fundamental no longer feeds srcMix at unity.
+  // 'hollow' specifically uses oscGain=0.5 to push the fundamental back
+  // and let sub + octUp dominate, reading as "low note seen from far".
+  // Other profiles are at or near unity, so this stage is mostly a
+  // no-op for them but gives 'hollow' a recognisable identity.
+  const oscAtten = new Tone.Gain(profile.oscGain);
+
+  // Sources: osc + sub merge here, then go through the LP. octUp routes
+  // around the filter and joins back at the env summing point.
   const srcMix = new Tone.Gain(1);
 
-  // Cutoff and Q FIXED — no LFO sweep, no random resonance variation.
+  // Cutoff comes from the profile (350 / 500 / 900 / 600 Hz). Q is
+  // fixed 0.5 across all profiles — overdamped, no resonance peak.
   //
   // Earlier versions had an LFO sweeping cutoff between (intrinsic 220-450)
-  // + (lfo output 120-450), so total cutoff swept ~340-900 Hz over a
-  // 6.5–40 s period. With Q up to 0.9, the filter had a small (~0.6 dB)
+  // + (lfo output 120-450), with Q up to 0.9 producing a small (~0.6 dB)
   // resonance peak right at cutoff. Each LFO cycle dragged that peak
   // through the fundamental + harmonics, momentarily amplifying whichever
   // partial sat at cutoff. On top of that, the LFO drove the biquad's
   // frequency AudioParam at audio rate, forcing per-block coefficient
   // recompute — a known source of subtle DSP artifacts on lower-end
-  // playback systems.
+  // playback systems. The cure was eliminating biquad modulation entirely.
   //
-  // After the saw→triangle change made the click WORSE rather than
-  // better (listener report: "drone трещит даже когда один на сцене"),
-  // the most likely remaining culprit is the LFO+filter interaction
-  // itself, not the waveform. Switching to a static filter eliminates:
-  //   - all biquad coefficient recomputation
-  //   - all resonance-at-fundamental crossings
-  //   - all AudioParam audio-rate scheduling
-  //
-  // Cutoff fixed at 500 Hz: well above the fundamental (65–185 Hz at
-  // oct 2) so the body of the triangle passes cleanly, but rolls off
-  // the small upper harmonics by the time they reach the limiter. Q
-  // 0.5 = critically damped, no resonance peak whatsoever (Butterworth
-  // is Q≈0.707; below that the filter is overdamped and has a smoothly
-  // rolling-off passband, no overshoot).
-  //
-  // The drone now has a static timbre. Lost: slow filter "breathing"
-  // motion that gave drone its evolving feel. Gained: a guaranteed-
-  // clean signal path with no modulation artifacts. If this fixes the
-  // click, we add modulation back via gentler means (e.g. slow gain
-  // breathing, or a much narrower LFO at low Q on a dedicated all-
-  // pass filter that won't cross harmonics).
+  // What we DIDN'T eliminate: per-instance cutoff diversity. The cutoff
+  // is set ONCE at construction from the profile and never moves — no
+  // biquad coefficient recompute happens at audio rate, no resonance
+  // crossings, no AudioParam scheduling. So the no-click guarantee
+  // still holds; we just get four cutoff "shades" across the descent
+  // instead of one.
   const filter = new Tone.Filter({
-    frequency: 500,
+    frequency: profile.cutoff,
     type: 'lowpass',
     Q: 0.5,
   });
 
-  // octUp gain reduced 0.35 → 0.25. With the filter no longer "closing"
-  // periodically, octUp doesn't need to provide constant body any more —
-  // the main filter branch is always passing the fundamental + harmonics.
-  // Lowering octUp shifts drone's perceived register slightly down (less
-  // mid-band emphasis) and removes one more potential transient source.
-  const octUpAtten = new Tone.Gain(0.25);
+  // octUp gain comes from the profile (0.15 / 0.25 / 0.4 / 0.4). The
+  // 'body' profile's 0.25 is the post-static-filter calibration value;
+  // 'airy' bumps to 0.4 so octUp dominates over a quieter fundamental,
+  // 'deep' drops to 0.15 so the high mid is barely present.
+  const octUpAtten = new Tone.Gain(profile.octUpGain);
 
-  // Master env. Also acts as the summing point where the filtered
-  // (saw+sub) branch and the unfiltered (octUp) branch merge.
-  const gain = new Tone.Gain(0);
+  // env — ramps from 0 to 0.1117 over 4 s. Cumulative chain across
+  // volume passes: 0.16 → 0.112 → 0.0896 → 0.07168 → 0.055 → 0.06875
+  // → 0.0859 → 0.1117 (third volume pass at +30%). The breath stage
+  // below modulates POST-env, so this is the average gain — peak swings
+  // up to 0.1117 × 1.15 = 0.128 at the breath LFO apex. The +0.017
+  // absolute over the static peak is negligible against the sum-of-peaks
+  // budget (the other 8 layer types contribute far more peak energy).
+  const env = new Tone.Gain(0);
 
-  osc.connect(srcMix);
+  // NEW (A): amplitude breath. Slow LFO modulating a multiplier post-env
+  // so the drone is no longer a flat-line gain after the ramp. Period
+  // 20–60 s with random initial phase — multiple drones drift relative
+  // to each other rather than pulsing in sync. Depth ±15% (≈ ±1.2 dB),
+  // chosen as the smallest depth audible as "breathing motion" rather
+  // than just "subtle wobble".
+  //
+  // Why post-env, not on env directly: env is being .rampTo()'d during
+  // start and dispose. Connecting an LFO to env.gain too would mean two
+  // sources writing the same AudioParam (additive sum tracks both ramp
+  // and LFO, which is fine in theory but harder to reason about).
+  // Splitting into env (ramp) and breath (LFO) keeps each stage doing
+  // exactly one thing.
+  const breath = new Tone.Gain(1);
+  const breathPeriod = 20 + Math.random() * 40; // 20–60 s
+  const breathLfo = new Tone.LFO({
+    frequency: 1 / breathPeriod,
+    min: -0.15,
+    max: 0.15,
+    type: 'sine',
+    phase: Math.random() * 360,
+  });
+  breathLfo.connect(breath.gain);
+  breathLfo.start();
+
+  // NEW (B): slow detune drift on osc + octUp. ±10 c around the initial
+  // detune offset, period 30–90 s, independent random phase per LFO so
+  // the two voices phase against each other continuously instead of
+  // locking after init. Together with breath, this prevents a single
+  // drone from settling into a perfectly static signal.
+  //
+  // Sub stays unmodulated — it's the bass anchor. Modulating sub at
+  // freq/2 (33–93 Hz) would create LF wobble that's hard to track and
+  // would fight the master HPF at 40 Hz that's clipping the bottom of
+  // sub's range already.
+  //
+  // Detune is a parameter on the oscillator, not the filter, so unlike
+  // the historic LFO+filter combination this modulation does NOT touch
+  // any biquad coefficients. It changes the oscillator's playback rate;
+  // no risk of resonance crossings, no audio-rate parameter scheduling.
+  const oscDetuneLfo = new Tone.LFO({
+    frequency: 1 / (30 + Math.random() * 60),
+    min: -10,
+    max: 10,
+    type: 'sine',
+    phase: Math.random() * 360,
+  });
+  oscDetuneLfo.connect(osc.detune);
+  oscDetuneLfo.start();
+
+  const octUpDetuneLfo = new Tone.LFO({
+    frequency: 1 / (30 + Math.random() * 60),
+    min: -10,
+    max: 10,
+    type: 'sine',
+    phase: Math.random() * 360,
+  });
+  octUpDetuneLfo.connect(octUp.detune);
+  octUpDetuneLfo.start();
+
+  // Routing — osc now goes through oscAtten before srcMix; everything
+  // post-filter goes through env then breath.
+  osc.connect(oscAtten);
+  oscAtten.connect(srcMix);
   sub.connect(subAtten);
   subAtten.connect(srcMix);
   srcMix.connect(filter);
-  filter.connect(gain);
+  filter.connect(env);
 
   octUp.connect(octUpAtten);
-  octUpAtten.connect(gain);
+  octUpAtten.connect(env);
+
+  env.connect(breath);
 
   osc.start();
   sub.start();
   octUp.start();
-  // Master env target 0.1117 (cumulative chain: 0.16 → 0.112 → 0.0896
-  // → 0.07168 → 0.055 → 0.06875 → 0.0859 → 0.1117 with third volume
-  // pass at +30%). Once the click bug was tracked down to HRTF +
-  // listener updates and the mix was clean, the listener requested
-  // three consecutive volume bumps (+25% / +25% / +30%) to restore
-  // presence that had been progressively lost during the click hunt
-  // — drone is now back above the original pre-cut level.
-  gain.gain.rampTo(0.1117, 4);
+  env.gain.rampTo(0.1117, 4);
 
   return {
-    output: gain,
+    output: breath,
     freq,
     dispose: () => {
-      gain.gain.rampTo(0, 2.5);
+      env.gain.rampTo(0, 2.5);
       window.setTimeout(() => {
         try {
+          // LFOs first — once the gain stages are disposed they stop
+          // emitting silently anyway, but cleaning up the LFO nodes
+          // explicitly avoids leaking Web Audio scheduling state.
+          breathLfo.stop().dispose();
+          oscDetuneLfo.stop().dispose();
+          octUpDetuneLfo.stop().dispose();
           osc.stop().dispose();
           sub.stop().dispose();
           subAtten.dispose();
@@ -538,7 +635,9 @@ function buildDrone(freq: number): PresetBuild {
           srcMix.dispose();
           filter.dispose();
           octUpAtten.dispose();
-          gain.dispose();
+          oscAtten.dispose();
+          env.dispose();
+          breath.dispose();
         } catch {
           /* already disposed */
         }
