@@ -740,43 +740,47 @@ function buildDrone(freq: number): PresetBuild {
   octUp.start();
 
   // Multi-stage envelope — three waves of decreasing amplitude, each
-  // shaped as attack-and-decay, giving the drone audible 90-second
+  // shaped as attack-and-decay, giving the drone an audible 60-second
   // arc rather than a constant presence:
   //
-  //      t=0     t=5    t=25    t=35    t=55    t=70    t=90
+  //      t=0     t=5    t=15    t=25    t=35    t=45    t=60
   //       │       │      │       │       │       │       │
   //       0 ────→ 1.00 → 0 ───→ 0.75 → 0 ───→ 0.40 → 0     (× peak)
   //               │      │      │      │      │      │
-  //               5 s    20 s   10 s   20 s   15 s   20 s
+  //               5 s    10 s   10 s   10 s   10 s   15 s
   //               atk    decay  atk    decay  atk    decay
   //
-  // Three waves, each smaller and with a longer attack than the last:
-  // wave 1 punches in at 5 s, wave 2 takes 10 s to crest at 75 %,
-  // wave 3 takes 15 s to crest at 40 %. The ramping attack times +
-  // shrinking peaks make each successive wave read as the cave
-  // "answering more softly" than the previous one. After t=90 s the
-  // drone is silent for the rest of its existence; the layer object
-  // stays alive so the listener can place another drone for another
-  // arc, by choice rather than by default.
+  // Three waves of shrinking peak amplitude. Wave 1 punches in fast
+  // (5 s attack); waves 2 and 3 take longer (10 s) to crest at 75 %
+  // and 40 % respectively. The slower attacks on the quieter waves
+  // make them feel deliberate rather than thin — they read as the
+  // cave "answering more softly" each time, not as the first wave
+  // running out. Final 15 s decay extends the dissolve so the drone
+  // doesn't snap to silence on the last beat.
   //
-  // Total drone life: 90 s. Previously 61 s (1+25+10+25); the
-  // listener wanted longer perceptible presence, hence the ramping
-  // attack times that stretch each wave's perceptible duration.
+  // After t=60 s the drone is silent for the rest of its existence;
+  // the layer object stays alive so the listener can place another
+  // drone for another arc, by choice rather than by default.
+  //
+  // History: 1+25+10+25 = 61 s (single rebound) → 5+20+10+20+15+20 =
+  // 90 s (three waves, slow) → 5+10+10+10+10+15 = 60 s (three waves,
+  // tighter spacing per the listener's "shorter pauses, more
+  // continuous arc" call).
   //
   // Linear ramps (not exponential) so the drone audibly persists
-  // through each full 20 s decay rather than dropping by half in
-  // the first few seconds. With breath LFO multiplying on top
-  // (range 0.6–1.0 over 13–40 s), the linear decay reads as
-  // "fading while still breathing" instead of dead-flat ramp.
+  // through each decay rather than dropping by half in the first
+  // few seconds. With breath LFO multiplying on top (range 0.6–1.0
+  // over 13–40 s), the linear decay reads as "fading while still
+  // breathing" instead of dead-flat ramp.
   const peak = 0.26138;
   const t0 = Tone.now();
   env.gain.setValueAtTime(0, t0);
   env.gain.linearRampToValueAtTime(peak, t0 + 5);                //  5 s attack    (wave 1, 100%)
-  env.gain.linearRampToValueAtTime(0, t0 + 25);                  // 20 s decay
-  env.gain.linearRampToValueAtTime(peak * 0.75, t0 + 35);        // 10 s attack    (wave 2,  75%)
-  env.gain.linearRampToValueAtTime(0, t0 + 55);                  // 20 s decay
-  env.gain.linearRampToValueAtTime(peak * 0.40, t0 + 70);        // 15 s attack    (wave 3,  40%)
-  env.gain.linearRampToValueAtTime(0, t0 + 90);                  // 20 s dissolve
+  env.gain.linearRampToValueAtTime(0, t0 + 15);                  // 10 s decay
+  env.gain.linearRampToValueAtTime(peak * 0.75, t0 + 25);        // 10 s attack    (wave 2,  75%)
+  env.gain.linearRampToValueAtTime(0, t0 + 35);                  // 10 s decay
+  env.gain.linearRampToValueAtTime(peak * 0.40, t0 + 45);        // 10 s attack    (wave 3,  40%)
+  env.gain.linearRampToValueAtTime(0, t0 + 60);                  // 15 s dissolve
 
   return {
     output: breath,
