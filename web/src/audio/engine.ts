@@ -944,15 +944,15 @@ function buildBell(freq: number): PresetBuild {
     sustain: 0.0,
     release: 1.2 + Math.random() * 1.0,
   });
-  // Out gain 0.1602 (cumulative: 0.22 → 0.154 → 0.1232 → 0.09856 →
-  // 0.1232 → 0.1602 with third volume pass at +30%; bell was held
-  // at 0.1232 through the second +25% pass to keep its strikes from
-  // dominating the bed, but is included in this third pass). Bells
-  // stand out because their decay envelope is longer than most layer
-  // types — multiple overlapping bells stack into a sustained
-  // chord-of-bells. With the mix clean and the rest of the bed
-  // pushed up to match, bell goes up too.
-  const out = new Tone.Gain(0.1602);
+  // Out gain 0.12015 (cumulative: 0.22 → 0.154 → 0.1232 → 0.09856 →
+  // 0.1232 → 0.1602 → 0.12015 with fourth pass at −25%; paired with
+  // the same cut on drip in this pass). Bells stand out because their
+  // decay envelope is longer than most layer types — multiple
+  // overlapping bells stack into a sustained chord-of-bells, which
+  // started masking drone after the rolloffFactor=0 fix made drone
+  // hold its level for the whole descent. Cutting bell back closes
+  // the gap rather than pushing drone up further.
+  const out = new Tone.Gain(0.12015);
   osc.connect(env);
   harm.connect(harmGain);
   harmGain.connect(env);
@@ -1009,15 +1009,15 @@ function buildDrip(freq: number): PresetBuild {
     sustain: 0.0,
     release: 0.2 + Math.random() * 0.25,
   });
-  // Out gain 0.2548 (cumulative: 0.28 → 0.196 → 0.1568 → 0.12544 →
-  // 0.1568 → 0.196 → 0.2548 with third pass at +30%; now sits a
-  // step ABOVE the original pre-cut level). Drip's transient attack
-  // puts most of its energy in a sub-millisecond peak that the ear
-  // reads as "loud" disproportionate to its RMS, so it sat too
-  // prominent originally — but with the master limiter no longer
-  // pumping on transient peaks (the actual click cause turned out
-  // to be HRTF, not transients), drip can comfortably ride here.
-  const out = new Tone.Gain(0.2548);
+  // Out gain 0.1911 (cumulative: 0.28 → 0.196 → 0.1568 → 0.12544 →
+  // 0.1568 → 0.196 → 0.2548 → 0.1911 with fourth pass at −25%; paired
+  // with the same cut on bell). Drip's transient attack puts most of
+  // its energy in a sub-millisecond peak that the ear reads as "loud"
+  // disproportionate to its RMS — at 0.2548 the strike was punching
+  // through drone and stealing focus from the harmonic foundation.
+  // 0.1911 is still well above the post-cut floor of 0.12544 from
+  // the click-hunt era, so drip's transient identity stays intact.
+  const out = new Tone.Gain(0.1911);
   osc.connect(lp);
   lp.connect(env);
   env.connect(out);
