@@ -527,20 +527,15 @@ function buildDrone(freq: number): PresetBuild {
   // 'deep' drops to 0.15 so the high mid is barely present.
   const octUpAtten = new Tone.Gain(profile.octUpGain);
 
-  // env — ramps from 0 to 0.16755 over 4 s. Cumulative chain across
+  // env — ramps from 0 to 0.21782 over 4 s. Cumulative chain across
   // volume passes: 0.16 → 0.112 → 0.0896 → 0.07168 → 0.055 → 0.06875
-  // → 0.0859 → 0.1117 → 0.16755 (fourth volume pass at +50%, requested
-  // after the breath/detune-drift unstaticify because the new dynamic
-  // dropped the perceived loudness of drone — the average gain dipped
-  // below the breath LFO's center, and several profiles ('hollow' in
-  // particular) attenuate the fundamental further. +50% restores
-  // presence relative to texture/breath which dominate the mid-band).
-  // The breath stage below modulates POST-env, so this is the average
-  // gain — peak swings up to 0.16755 × 1.15 = 0.193 at the breath LFO
-  // apex. Sum-of-peaks budget across the 9 layer types is ~1.9 against
-  // the master 0.9 gain; +0.025 absolute on drone's peak is small
-  // relative to swell/glitch peaks (0.366, 0.325) and is partially
-  // offset by the simultaneous −20% on texture and breath in this pass.
+  // → 0.0859 → 0.1117 → 0.16755 → 0.21782 (fourth pass +50%, fifth
+  // pass +30% — the +30% is the latest "raise everything except pads"
+  // request, applied after the rolloffFactor=0 fix kept drone present
+  // through the descent but the bed still felt slightly under-loud in
+  // absolute terms). The breath stage below modulates POST-env, so
+  // this is the average gain — peak swings up to 0.21782 × 1.15 =
+  // 0.250 at the breath LFO apex.
   const env = new Tone.Gain(0);
 
   // NEW (A): amplitude breath. Slow LFO modulating a multiplier post-env
@@ -620,7 +615,7 @@ function buildDrone(freq: number): PresetBuild {
   osc.start();
   sub.start();
   octUp.start();
-  env.gain.rampTo(0.16755, 4);
+  env.gain.rampTo(0.21782, 4);
 
   return {
     output: breath,
@@ -678,12 +673,11 @@ function buildTexture(freq: number): PresetBuild {
   lfo.connect(bp.frequency);
 
   noise.start();
-  // texture env: 0.09 → 0.1125 → 0.1406 → 0.1828 → 0.14624 (fourth pass
-  // at −20%, paired with the same cut on breath and a +50% on drone —
-  // texture and breath had been carrying too much mid-band weight after
-  // the previous +30% bump and were masking drone, especially with the
-  // unstaticify pass slightly lowering drone's perceived loudness).
-  gain.gain.rampTo(0.14624, 5);
+  // texture env: 0.09 → 0.1125 → 0.1406 → 0.1828 → 0.14624 → 0.19011
+  // (fourth pass −20%, fifth pass +30% — the +30% is the latest "raise
+  // everything except pads" pass; texture is back above its post-third-
+  // pass level but still below the pre-cut 0.1828 thanks to the −20%).
+  gain.gain.rampTo(0.19011, 5);
 
   return {
     output: gain,
@@ -734,14 +728,15 @@ function buildPulse(freq: number): PresetBuild {
     sustain: 0.35 + Math.random() * 0.35, // 0.35–0.7
     release: 1.5 + Math.random() * 1.8,   // 1.5–3.3s
   });
-  // Out gain 0.156 (chain: 0.18 → 0.144 → 0.1152 → 0.144 → 0.18 →
-  // 0.12 → 0.156 with third pass at +30%). Pulse's repeating attack
-  // envelope means multiple instances can hit on overlapping cycles
-  // and stack; we manually cut to 0.12 in the second pass because at
-  // 0.18 the rhythmic bite was poking out, then bumped 30% back up
-  // along with everything else. 0.156 sits a step below pulse's
-  // pre-cut level, keeping its rhythm present without dominating.
-  const gain = new Tone.Gain(0.156);
+  // Out gain 0.1521 (chain: 0.18 → 0.144 → 0.1152 → 0.144 → 0.18 →
+  // 0.12 → 0.156 → 0.117 → 0.1521 — fourth pass −25% and fifth pass
+  // +30% applied together in a single edit; net 0.1521 is essentially
+  // pulse's pre-cut 0.156 minus a hair, intentional because pulse's
+  // repeating attack envelope had been poking out again after the
+  // drone/bell/drip rebalance and the user requested its bite be
+  // dialled back relative to the rest of the bed before the +30%
+  // global lift).
+  const gain = new Tone.Gain(0.1521);
   osc.connect(filter);
   filter.connect(env);
   env.connect(gain);
@@ -801,8 +796,12 @@ function buildGlitch(freq: number): PresetBuild {
     bp.frequency.cancelScheduledValues(time);
     bp.frequency.setValueAtTime(target, time);
     gain.gain.cancelScheduledValues(time);
-    // glitch peak: 0.16 → 0.20 → 0.25 → 0.325 (third pass at +30%).
-    gain.gain.setValueAtTime(0.325, time);
+    // glitch peak: 0.16 → 0.20 → 0.25 → 0.325 → 0.4225 (fourth pass
+    // at +30%, "raise everything except pads"). At 0.4225 glitch is
+    // now the second-loudest peak after swell — its short decay
+    // (0.04–0.12 s) keeps the RMS contribution low so it shouldn't
+    // dominate, but worth A/B-checking against other transients.
+    gain.gain.setValueAtTime(0.4225, time);
     gain.gain.exponentialRampToValueAtTime(0.001, time + decay);
   }, subdiv).start(0);
   loop.probability = 0.10 + Math.random() * 0.18;
@@ -870,13 +869,13 @@ function buildBreath(freq: number): PresetBuild {
     sustain: 0.35 + Math.random() * 0.3,
     release: 2.0 + Math.random() * 2.5,
   });
-  // breath out gain 0.12 → 0.15 → 0.1875 → 0.2438 → 0.19504 (fourth
-  // pass at −20%, paired with the same cut on texture and a +50% on
-  // drone — see texture's rampTo for the rationale; breath's vowel
-  // formants sit in the same 700–2400 Hz band where drone's octUp
-  // lives, so cutting breath here directly clears space for the
-  // boosted drone).
-  const out = new Tone.Gain(0.19504);
+  // breath out gain 0.12 → 0.15 → 0.1875 → 0.2438 → 0.19504 → 0.25355
+  // (fourth pass −20%, fifth pass +30% — the +30% is the latest "raise
+  // everything except pads" pass; breath now sits above the previous
+  // 0.2438 peak, which is fine because the rolloffFactor=0 fix means
+  // drone holds level and won't be progressively masked by breath
+  // through the descent the way it was before that fix).
+  const out = new Tone.Gain(0.25355);
   sumGain.connect(env);
   env.connect(out);
 
@@ -944,15 +943,12 @@ function buildBell(freq: number): PresetBuild {
     sustain: 0.0,
     release: 1.2 + Math.random() * 1.0,
   });
-  // Out gain 0.12015 (cumulative: 0.22 → 0.154 → 0.1232 → 0.09856 →
-  // 0.1232 → 0.1602 → 0.12015 with fourth pass at −25%; paired with
-  // the same cut on drip in this pass). Bells stand out because their
-  // decay envelope is longer than most layer types — multiple
-  // overlapping bells stack into a sustained chord-of-bells, which
-  // started masking drone after the rolloffFactor=0 fix made drone
-  // hold its level for the whole descent. Cutting bell back closes
-  // the gap rather than pushing drone up further.
-  const out = new Tone.Gain(0.12015);
+  // Out gain 0.15620 (cumulative: 0.22 → 0.154 → 0.1232 → 0.09856 →
+  // 0.1232 → 0.1602 → 0.12015 → 0.15620 with fifth pass at +30%
+  // "raise everything except pads"; bell is back near its third-pass
+  // peak of 0.1602 but still below it, so the chord-of-bells masking
+  // observed pre-fourth-pass shouldn't fully return).
+  const out = new Tone.Gain(0.15620);
   osc.connect(env);
   harm.connect(harmGain);
   harmGain.connect(env);
@@ -1009,15 +1005,13 @@ function buildDrip(freq: number): PresetBuild {
     sustain: 0.0,
     release: 0.2 + Math.random() * 0.25,
   });
-  // Out gain 0.1911 (cumulative: 0.28 → 0.196 → 0.1568 → 0.12544 →
-  // 0.1568 → 0.196 → 0.2548 → 0.1911 with fourth pass at −25%; paired
-  // with the same cut on bell). Drip's transient attack puts most of
-  // its energy in a sub-millisecond peak that the ear reads as "loud"
-  // disproportionate to its RMS — at 0.2548 the strike was punching
-  // through drone and stealing focus from the harmonic foundation.
-  // 0.1911 is still well above the post-cut floor of 0.12544 from
-  // the click-hunt era, so drip's transient identity stays intact.
-  const out = new Tone.Gain(0.1911);
+  // Out gain 0.24843 (cumulative: 0.28 → 0.196 → 0.1568 → 0.12544 →
+  // 0.1568 → 0.196 → 0.2548 → 0.1911 → 0.24843 with fifth pass at
+  // +30%). Drip is now back near its previous 0.2548 peak. Drip's
+  // sub-millisecond transient still reads "loud" relative to RMS, so
+  // if it starts punching through drone again next pass would bring
+  // it back below 0.2 rather than reaching for further boosts.
+  const out = new Tone.Gain(0.24843);
   osc.connect(lp);
   lp.connect(env);
   env.connect(out);
@@ -1068,12 +1062,15 @@ function buildSwell(freq: number): PresetBuild {
   noise.connect(bp);
   bp.connect(gain);
 
-  // Amplitude wave period 6–18s. Peak amplitude 0.2032–0.3657 (chain:
-  // 0.10–0.18 → 0.125–0.225 → 0.1563–0.2813 → 0.2032–0.3657, three
-  // consecutive volume passes +25%/+25%/+30%). Same swell can either
-  // feel like a slow tide or a quick gust.
+  // Amplitude wave period 6–18s. Peak amplitude 0.26416–0.47541 (chain:
+  // 0.10–0.18 → 0.125–0.225 → 0.1563–0.2813 → 0.2032–0.3657 →
+  // 0.26416–0.47541, fourth pass at +30% "raise everything except
+  // pads"). Swell's max peak is now the loudest single-source peak
+  // in the 9 layer types — its slow attack and infrequent placement
+  // mean the high peak only shows up sporadically, but if the bed
+  // ever starts pumping the limiter it'll be the first suspect.
   const ampPeriod = 6 + Math.random() * 12;
-  const ampPeak = 0.2032 + Math.random() * 0.1625;
+  const ampPeak = 0.26416 + Math.random() * 0.21125;
   const amp = new Tone.LFO({
     frequency: 1 / ampPeriod,
     min: 0,
@@ -1169,17 +1166,18 @@ function buildChord(rootFreq: number): PresetBuild {
   // LFO target; outFinal is a normal AudioParam we ramp down on dispose.
   const outDriven = new Tone.Gain(0);
   lp.connect(outDriven);
-  // Breathe period 16–32 s. Peak 0.0728–0.131 (cumulative chain:
+  // Breathe period 16–32 s. Peak 0.09464–0.17030 (cumulative chain:
   // 0.10–0.18 → 0.07–0.126 → 0.056–0.1008 → 0.0448–0.08064 → 0.0358–
-  // 0.06451 → 0.0448–0.0806 → 0.056–0.1008 → 0.0728–0.131 with three
-  // consecutive volume passes +25%/+25%/+30%; now sits just below
-  // the pre-cut level). Chord's internal sum (root + 0.45-0.7×fifth
-  // + 0.25-0.55×oct ≈ 2.25 worst case) scaled by LFO peak:
-  // instantaneous peak ~0.295 at max, still under the clipping
-  // ceiling but closer than before — limiter restore advisable if
-  // any further bumps happen.
+  // 0.06451 → 0.0448–0.0806 → 0.056–0.1008 → 0.0728–0.131 → 0.09464–
+  // 0.17030, fourth pass at +30% "raise everything except pads"; now
+  // sits at-or-above the original pre-cut peak level). Chord's internal
+  // sum (root + 0.45-0.7×fifth + 0.25-0.55×oct ≈ 2.25 worst case)
+  // scaled by LFO peak: instantaneous peak ~0.383 at max — that's
+  // approaching the headroom ceiling. The limiter-restore advisory
+  // from the previous comment now applies in earnest; if any further
+  // bumps happen, restore the master Tone.Limiter before the bump.
   const breathePeriod = 16 + Math.random() * 16;
-  const breathePeak = 0.0728 + Math.random() * 0.0582;
+  const breathePeak = 0.09464 + Math.random() * 0.07566;
   const breathe = new Tone.LFO({
     frequency: 1 / breathePeriod,
     min: 0,
