@@ -36,6 +36,13 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
         color: '#d8d4cf',
       }}
     >
+      {/* External-links rail — fixed to the viewport corner so it stays
+          visible while the player scrolls through long content like the
+          troubleshoot Hermes-patch prompt. Three muted icons; backgrounds
+          are transparent to keep the corner quiet (the centered title
+          block is the focal point). zIndex above the inner content but
+          well below modal/finale overlays. */}
+      <ExternalLinks />
       <div
         style={{
           minHeight: '100%',
@@ -684,5 +691,138 @@ function StatusDot({ ok }: { ok: boolean }) {
         transition: 'background 200ms, box-shadow 200ms',
       }}
     />
+  );
+}
+
+// -----------------------------------------------------------------------------
+// External-links rail — top-right corner of the intro screen.
+//
+// Three icon links: author's X (Twitter), the GitHub repo, and the docs
+// site. Rendered as bare SVGs (no button chrome) because the surrounding
+// page is deliberately quiet — borders or filled backgrounds in the
+// corner would compete with the centered title block. Hover bumps the
+// stroke colour from the muted `#a09d99` (matches italic descent prose)
+// to the title's `#d8d4cf` so the affordance is felt without adding
+// visual weight at rest.
+//
+// `position: fixed` so the row stays anchored to the viewport while the
+// outer scroll container moves underneath it (the troubleshoot section
+// can push content well past one screen).
+// -----------------------------------------------------------------------------
+
+function ExternalLinks() {
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 20,
+        right: 24,
+        zIndex: 2,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 14,
+      }}
+    >
+      <IconLink href="https://x.com/badfriend" label="Author on X">
+        <XIcon />
+      </IconLink>
+      <IconLink
+        href="https://github.com/discodirector/sonoglyph"
+        label="Source on GitHub"
+      >
+        <GithubIcon />
+      </IconLink>
+      <IconLink href="https://docs.sonoglyph.xyz" label="Documentation">
+        <DocsIcon />
+      </IconLink>
+    </div>
+  );
+}
+
+function IconLink({
+  href,
+  label,
+  children,
+}: {
+  href: string;
+  label: string;
+  children: React.ReactNode;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={label}
+      title={label}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        // 28 px hit-target, 18 px glyph centred — generous click area
+        // without the visual noise of a 36 px ghost-button.
+        width: 28,
+        height: 28,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: hover ? '#d8d4cf' : '#a09d99',
+        transition: 'color 160ms ease',
+        textDecoration: 'none',
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+// Icon glyphs use `currentColor` so the parent <a> drives the hover
+// transition. 18×18 final size, viewBox 24×24 — standard for the X and
+// GitHub brand marks. Source paths sourced from the official brand
+// guides / Octicons; trimmed to their first sub-path so we ship as
+// little SVG as possible.
+
+function XIcon() {
+  return (
+    <svg
+      width={18}
+      height={18}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.451-6.231zm-1.161 17.52h1.833L7.084 4.126H5.117l11.966 15.644z" />
+    </svg>
+  );
+}
+
+function GithubIcon() {
+  return (
+    <svg
+      width={18}
+      height={18}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.4 3-.405 1.02.005 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+    </svg>
+  );
+}
+
+function DocsIcon() {
+  // Open-book glyph — picked over a generic document icon so it reads
+  // as "READ THE DOCS" at a glance, not "open file". 2 px stroke-equivalent
+  // built from filled paths so it matches the brand-icon weight.
+  return (
+    <svg
+      width={18}
+      height={18}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M12 5.5C10.5 4.6 8.5 4 6 4H3a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h3c2 0 3.5.5 5 1.5V5.5zM13 5.5v15c1.5-1 3-1.5 5-1.5h3a1 1 0 0 0 1-1V5a1 1 0 0 0-1-1h-3c-2.5 0-4.5.6-5 1.5z" />
+    </svg>
   );
 }
