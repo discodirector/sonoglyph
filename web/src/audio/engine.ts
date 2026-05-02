@@ -666,6 +666,52 @@ function buildDrone(freq: number): PresetBuild {
   octUpDetuneLfo.connect(octUp.detune);
   octUpDetuneLfo.start();
 
+  // NEW (D): harmonic crossfade. Two LFOs in antiphase that morph the
+  // drone between dark (fundamental dominant) and bright (octUp dominant)
+  // over a 25–45 s period. This is the timbral equivalent of the breath
+  // amplitude LFO — same kind of slow lifelike motion but on the spectral
+  // axis instead of the loudness axis.
+  //
+  // Mapping (in antiphase, period shared):
+  //   oscAtten LFO     min = profile.oscGain × 0.6, max = profile.oscGain × 1.0
+  //   octUpAtten LFO   min = profile.octUpGain × 0.4, max = profile.octUpGain × 1.6
+  //
+  // When oscAtten is at max (loud fundamental) octUpAtten is at min
+  // (quiet octUp) → DARK moment. Half a period later: oscAtten at min,
+  // octUpAtten at max → BRIGHT moment. The crossfade preserves the
+  // profile's identity (the per-profile values still anchor the centre
+  // of each LFO's range) while giving each instance a slow tonal
+  // breathing layered on top of the amplitude breath.
+  //
+  // Sub stays unmodulated, same reason as the detune drift LFOs above:
+  // the sub-octave is the bass anchor and doesn't benefit from spectral
+  // modulation at this depth.
+  //
+  // No biquad involvement — both targets are plain Gain AudioParams,
+  // so this modulation is in the same "no z-state, no coefficient
+  // recompute" safe class as the existing LFOs.
+  const crossfadePeriod = 25 + Math.random() * 20; // 25–45 s
+  const crossfadePhase = Math.random() * 360;
+  const oscGainLfo = new Tone.LFO({
+    frequency: 1 / crossfadePeriod,
+    min: profile.oscGain * 0.6,
+    max: profile.oscGain * 1.0,
+    type: 'sine',
+    phase: crossfadePhase,
+  });
+  oscGainLfo.connect(oscAtten.gain);
+  oscGainLfo.start();
+
+  const octUpGainLfo = new Tone.LFO({
+    frequency: 1 / crossfadePeriod,
+    min: profile.octUpGain * 0.4,
+    max: profile.octUpGain * 1.6,
+    type: 'sine',
+    phase: (crossfadePhase + 180) % 360, // antiphase to oscGainLfo
+  });
+  octUpGainLfo.connect(octUpAtten.gain);
+  octUpGainLfo.start();
+
   // Routing — osc now goes through oscAtten before srcMix; everything
   // post-filter goes through env then breath.
   osc.connect(oscAtten);
@@ -735,6 +781,8 @@ function buildDrone(freq: number): PresetBuild {
           breathLfo.stop().dispose();
           oscDetuneLfo.stop().dispose();
           octUpDetuneLfo.stop().dispose();
+          oscGainLfo.stop().dispose();
+          octUpGainLfo.stop().dispose();
           osc.stop().dispose();
           sub.stop().dispose();
           subAtten.dispose();
@@ -1813,6 +1861,39 @@ export function addLayer(
     panner.connect(reverbSend);
   }
 
+  // Drone-only: slow stereo pan drift. LFO sweeps panner.positionX across
+  // a ±5-unit range centred on the original placement x, with a random
+  // 40–90 s period. Listener subconsciously tracks the drift, which
+  // prevents the drone from feeling like a fixed point in space.
+  //
+  // Tone.Signal connect overrides the AudioParam, so the LFO's min/max
+  // are absolute target values — the original position[0] passed to the
+  // Panner3D constructor gets wiped and replaced by the LFO output. We
+  // encode the placement x as the CENTRE of the LFO range so the
+  // perceived placement stays anchored where the bridge originally
+  // chose; the drift is symmetrical motion around that anchor.
+  //
+  // Random phase per drone instance — multiple drones don't pan in sync.
+  // Random period within the 40–90 s window also helps decorrelate.
+  //
+  // Only drone gets this. Other layers either don't sustain long enough
+  // to benefit (bell/drip/glitch are transient) or have positional
+  // identity tied to their placement (texture/chord/breath are
+  // "localised atmosphere" — moving them would make the placement
+  // visualisation drift away from the audio source).
+  let panLfo: Tone.LFO | null = null;
+  if (isOmnipresent) {
+    panLfo = new Tone.LFO({
+      frequency: 1 / (40 + Math.random() * 50), // 40–90 s
+      min: position[0] - 5,
+      max: position[0] + 5,
+      type: 'sine',
+      phase: Math.random() * 360,
+    });
+    panLfo.connect(panner.positionX);
+    panLfo.start();
+  }
+
   return {
     id: layerId,
     type,
@@ -1821,6 +1902,7 @@ export function addLayer(
       preset.dispose();
       window.setTimeout(() => {
         try {
+          if (panLfo) panLfo.stop().dispose();
           panner.dispose();
         } catch {
           /* already disposed */
