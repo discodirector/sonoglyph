@@ -590,8 +590,10 @@ function buildDrone(freq: number): PresetBuild {
   // Peak instantaneous gain: 0.26138 × 1.0 = 0.26138 at the breath
   // LFO apex (during the t=5 s wave-1 peak of the envelope; later
   // waves cap at 0.75× and 0.40× of that). Trough during peak phase:
-  // 0.26138 × 0.6 = 0.157. The masterLimiter at −1 dBFS is the
-  // backstop for the sum-of-peaks worst case.
+  // 0.26138 × 0.6 = 0.157. Sympathy harmonics (added below) add up
+  // to 0.145 to the env input at all-LFOs-apex; multiplied by env's
+  // 0.26138 peak → 0.038 additional at wave-1 peak. The masterLimiter
+  // at −1 dBFS is the backstop for the sum-of-peaks worst case.
   const env = new Tone.Gain(0);
 
   // NEW (A, fixed): amplitude breath. Slow LFO modulating a multiplier
@@ -713,6 +715,81 @@ function buildDrone(freq: number): PresetBuild {
   octUpGainLfo.connect(octUpAtten.gain);
   octUpGainLfo.start();
 
+  // NEW (I): sympathy harmonics. Four sine partials at the 3rd / 5th
+  // / 7th / 9th harmonics of the fundamental, each with its own quiet,
+  // slow-LFO-modulated amplitude so they swell up and recede
+  // asynchronously. Adds an animated harmonic series above the static
+  // drone core, pushing the timbre from "synthesized triangle stack"
+  // toward "acoustic instrument played in a hall" — like the
+  // sympathetic strings on a sitar or the natural overtones of a
+  // sustained voice in a stone room.
+  //
+  // Why these specific harmonics:
+  //   3rd  → perfect fifth above the octave (most musical, loudest)
+  //   5th  → major third above 2 octaves
+  //   7th  → flat minor 7th above 2 octaves (slightly inharmonic with
+  //          equal temperament — gives the bronze-bell tinge)
+  //   9th  → major 2nd above 3 octaves (highest, quietest)
+  //
+  // All odd. Even harmonics (2nd / 4th / 6th) would just reinforce
+  // the existing octUp octave doubling — odd harmonics open intervals
+  // that aren't already represented in the dry mix.
+  //
+  // Each partial bypasses the LP filter and joins env directly,
+  // alongside octUp's bypass path. The LP cutoff (350-900 Hz per
+  // profile) would otherwise attenuate them out of audibility, and
+  // we WANT them present for shimmer. Per-partial detune ±5 c gives
+  // subtle inharmonicity that prevents the "perfect math harmonic"
+  // synthesizer feel and creates beating against the slowly-detune-
+  // drifting fundamental + octUp.
+  //
+  // Per-partial LFO (period 15-40 s, random phase, range 0..peak).
+  // Independent periods + phases mean one partial may be at peak
+  // while another is at trough at any moment — the harmonic series
+  // animates continuously without a global cycle.
+  //
+  // Headroom: sum of peaks at all-LFOs-apex = 0.06+0.04+0.025+0.02
+  // = 0.145, multiplied by env (0.26138 at wave-1 peak) = 0.038
+  // extra at the envelope's peak moment. masterLimiter at -1 dBFS
+  // catches the rare worst-case sum-with-other-layers.
+  const SYMPATHY_HARMONICS: Array<{ ratio: number; peak: number }> = [
+    { ratio: 3, peak: 0.06 },
+    { ratio: 5, peak: 0.04 },
+    { ratio: 7, peak: 0.025 },
+    { ratio: 9, peak: 0.02 },
+  ];
+  const sympathyOscs: Tone.Oscillator[] = [];
+  const sympathyGains: Tone.Gain[] = [];
+  const sympathyLfos: Tone.LFO[] = [];
+  for (const { ratio, peak: partialPeak } of SYMPATHY_HARMONICS) {
+    const partialFreq = freq * ratio;
+    // Defensive: skip if a future octave bump pushes a partial above
+    // 8 kHz where it stops contributing musical content and starts
+    // risking DAC aliasing on lower-end playback systems.
+    if (partialFreq > 8000) continue;
+    const partial = new Tone.Oscillator({
+      frequency: partialFreq,
+      type: 'sine',
+      detune: (Math.random() - 0.5) * 10, // ±5 c — subtle inharmonicity
+    });
+    const partialGain = new Tone.Gain(0);
+    partial.connect(partialGain);
+    partialGain.connect(env); // bypass LP filter (joins alongside octUp)
+    const partialLfo = new Tone.LFO({
+      frequency: 1 / (15 + Math.random() * 25), // 15-40 s
+      min: 0,
+      max: partialPeak,
+      type: 'sine',
+      phase: Math.random() * 360,
+    });
+    partialLfo.connect(partialGain.gain);
+    partialLfo.start();
+    partial.start();
+    sympathyOscs.push(partial);
+    sympathyGains.push(partialGain);
+    sympathyLfos.push(partialLfo);
+  }
+
   // Routing — osc now goes through oscAtten before srcMix; everything
   // post-filter goes through env then breath.
   osc.connect(oscAtten);
@@ -797,14 +874,17 @@ function buildDrone(freq: number): PresetBuild {
           octUpDetuneLfo.stop().dispose();
           oscGainLfo.stop().dispose();
           octUpGainLfo.stop().dispose();
+          for (const lfo of sympathyLfos) lfo.stop().dispose();
           osc.stop().dispose();
           sub.stop().dispose();
           subAtten.dispose();
           octUp.stop().dispose();
+          for (const o of sympathyOscs) o.stop().dispose();
           srcMix.dispose();
           filter.dispose();
           octUpAtten.dispose();
           oscAtten.dispose();
+          for (const g of sympathyGains) g.dispose();
           env.dispose();
           breath.dispose();
         } catch {
