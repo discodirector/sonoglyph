@@ -527,13 +527,20 @@ function buildDrone(freq: number): PresetBuild {
   // 'deep' drops to 0.15 so the high mid is barely present.
   const octUpAtten = new Tone.Gain(profile.octUpGain);
 
-  // env — ramps from 0 to 0.1117 over 4 s. Cumulative chain across
+  // env — ramps from 0 to 0.16755 over 4 s. Cumulative chain across
   // volume passes: 0.16 → 0.112 → 0.0896 → 0.07168 → 0.055 → 0.06875
-  // → 0.0859 → 0.1117 (third volume pass at +30%). The breath stage
-  // below modulates POST-env, so this is the average gain — peak swings
-  // up to 0.1117 × 1.15 = 0.128 at the breath LFO apex. The +0.017
-  // absolute over the static peak is negligible against the sum-of-peaks
-  // budget (the other 8 layer types contribute far more peak energy).
+  // → 0.0859 → 0.1117 → 0.16755 (fourth volume pass at +50%, requested
+  // after the breath/detune-drift unstaticify because the new dynamic
+  // dropped the perceived loudness of drone — the average gain dipped
+  // below the breath LFO's center, and several profiles ('hollow' in
+  // particular) attenuate the fundamental further. +50% restores
+  // presence relative to texture/breath which dominate the mid-band).
+  // The breath stage below modulates POST-env, so this is the average
+  // gain — peak swings up to 0.16755 × 1.15 = 0.193 at the breath LFO
+  // apex. Sum-of-peaks budget across the 9 layer types is ~1.9 against
+  // the master 0.9 gain; +0.025 absolute on drone's peak is small
+  // relative to swell/glitch peaks (0.366, 0.325) and is partially
+  // offset by the simultaneous −20% on texture and breath in this pass.
   const env = new Tone.Gain(0);
 
   // NEW (A): amplitude breath. Slow LFO modulating a multiplier post-env
@@ -613,7 +620,7 @@ function buildDrone(freq: number): PresetBuild {
   osc.start();
   sub.start();
   octUp.start();
-  env.gain.rampTo(0.1117, 4);
+  env.gain.rampTo(0.16755, 4);
 
   return {
     output: breath,
@@ -671,8 +678,12 @@ function buildTexture(freq: number): PresetBuild {
   lfo.connect(bp.frequency);
 
   noise.start();
-  // texture env: 0.09 → 0.1125 → 0.1406 → 0.1828 (third pass at +30%).
-  gain.gain.rampTo(0.1828, 5);
+  // texture env: 0.09 → 0.1125 → 0.1406 → 0.1828 → 0.14624 (fourth pass
+  // at −20%, paired with the same cut on breath and a +50% on drone —
+  // texture and breath had been carrying too much mid-band weight after
+  // the previous +30% bump and were masking drone, especially with the
+  // unstaticify pass slightly lowering drone's perceived loudness).
+  gain.gain.rampTo(0.14624, 5);
 
   return {
     output: gain,
@@ -859,8 +870,13 @@ function buildBreath(freq: number): PresetBuild {
     sustain: 0.35 + Math.random() * 0.3,
     release: 2.0 + Math.random() * 2.5,
   });
-  // breath out gain 0.12 → 0.15 → 0.1875 → 0.2438 (third pass at +30%).
-  const out = new Tone.Gain(0.2438);
+  // breath out gain 0.12 → 0.15 → 0.1875 → 0.2438 → 0.19504 (fourth
+  // pass at −20%, paired with the same cut on texture and a +50% on
+  // drone — see texture's rampTo for the rationale; breath's vowel
+  // formants sit in the same 700–2400 Hz band where drone's octUp
+  // lives, so cutting breath here directly clears space for the
+  // boosted drone).
+  const out = new Tone.Gain(0.19504);
   sumGain.connect(env);
   env.connect(out);
 
