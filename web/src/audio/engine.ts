@@ -1650,11 +1650,39 @@ export function addLayer(
   const layerId = id ?? crypto.randomUUID();
   const preset = buildPreset(type, freq);
 
+  // Distance attenuation override for drone.
+  //
+  // Web Audio's PannerNode uses inverse-distance attenuation:
+  //   gain = refDistance / (refDistance + rolloffFactor × (distance − refDistance))
+  // With the defaults below (refDistance 6, rolloffFactor 0.4), a layer
+  // 50 units from the listener plays at gain 0.25 (−12 dB). For most
+  // layer types that's the desired behaviour: bells / drips / glitches
+  // are transient and get triggered at positions close to the camera,
+  // so they always sound at near-unity. Drone is different — it's
+  // placed once near the start of the descent and sustains until the
+  // end, while the listener (= R3F camera) keeps descending away from
+  // it. By mid-descent drone is sitting at −5 to −10 dB just from
+  // distance attenuation, on top of the Fletcher-Munson penalty its
+  // low fundamental already pays. That was the real "drone is too
+  // quiet" complaint — successive volume bumps could only compensate
+  // partially because the attenuation is time-dependent.
+  //
+  // rolloffFactor: 0 collapses the inverse-distance formula to gain=1
+  // regardless of distance, so drone holds its level for the full
+  // descent. Stereo positioning (L/R based on position relative to
+  // the listener) still works — that's a function of the panner's
+  // angle, not its distance gain — so two drones placed at different
+  // x positions still feel different in the stereo field.
+  //
+  // Only drone gets this; other sustained types (texture, chord) are
+  // localised atmosphere and benefit from the distance fade.
+  const isOmnipresent = type === 'drone';
+
   const panner = new Tone.Panner3D({
     positionX: position[0],
     positionY: position[1],
     positionZ: position[2],
-    rolloffFactor: 0.4,
+    rolloffFactor: isOmnipresent ? 0 : 0.4,
     refDistance: 6,
     maxDistance: 120,
     // DIAGNOSTIC: equalpower instead of HRTF. HRTF panning convolves
