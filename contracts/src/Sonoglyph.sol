@@ -23,6 +23,13 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
  * from a real completed descent the bridge witnessed end-to-end. The bridge
  * mints to the player's chosen address (passed in `to`).
  *
+ * Supply policy: hard-capped at {MAX_SUPPLY} = 250 tokens for the lifetime
+ * of the contract — there is no setter to raise it, not even for the owner.
+ * Each address can ever receive at most one Sonoglyph (tracked in
+ * {hasMinted}). The flag is permanent: transferring the token away does
+ * NOT reset the receiver's eligibility. Together this turns Sonoglyph into
+ * a small, collector-resistant series rather than an open mint.
+ *
  * Rendering: `tokenURI(id)` is fully on-chain. Returns
  *   data:application/json;base64,<json>
  * where the JSON contains:
@@ -52,6 +59,14 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 contract Sonoglyph is ERC721, Ownable {
     using Strings for uint256;
 
+    /// @notice Hard cap on total mintable Sonoglyphs across the lifetime of
+    ///         the contract. Chosen for the Hermes Hackathon edition: a small
+    ///         finite series, not an open mint. Once {lastTokenId} hits this,
+    ///         {mintDescent} reverts permanently — there is no way to raise
+    ///         the cap (no setter, not even owner-only). Burn + remint is
+    ///         not a feature of this contract either.
+    uint256 public constant MAX_SUPPLY = 250;
+
     struct Descent {
         string glyph;
         string journal;
@@ -66,6 +81,14 @@ contract Sonoglyph is ERC721, Ownable {
 
     /// @notice Last assigned tokenId; tokens are 1-indexed (first mint is #1).
     uint256 public lastTokenId;
+
+    /// @notice Whether the given address has ever received a Sonoglyph.
+    ///         One-mint-per-address is enforced for the lifetime of the
+    ///         contract — even if the holder transfers their token away,
+    ///         this flag stays set so the same address cannot receive a
+    ///         fresh mint later. Prevents collectors from snapping up the
+    ///         scarce supply via a small set of recipient wallets.
+    mapping(address => bool) public hasMinted;
 
     event DescentMinted(
         uint256 indexed tokenId,
@@ -109,7 +132,10 @@ contract Sonoglyph is ERC721, Ownable {
         require(to != address(0), "to=0");
         require(bytes(glyph).length > 0, "empty glyph");
         require(bytes(audioCid).length > 0, "empty audioCid");
+        require(lastTokenId < MAX_SUPPLY, "max supply");
+        require(!hasMinted[to], "already minted");
 
+        hasMinted[to] = true;
         tokenId = ++lastTokenId; // 1-indexed
         _descents[tokenId] = Descent({
             glyph: glyph,

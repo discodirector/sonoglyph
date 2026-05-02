@@ -83,14 +83,74 @@ contract SonoglyphTest is Test {
     }
 
     function test_mintDescent_idsAreSequential() public {
+        // Three different recipients — same address would now revert under
+        // the one-mint-per-address rule, so we need fresh `to`s here.
+        address p1 = makeAddr("p1");
+        address p2 = makeAddr("p2");
+        address p3 = makeAddr("p3");
         vm.startPrank(bridge);
-        uint256 id1 = nft.mintDescent(player, SAMPLE_GLYPH, "j1", SAMPLE_CID, "AAAAAA");
-        uint256 id2 = nft.mintDescent(player, SAMPLE_GLYPH, "j2", SAMPLE_CID, "BBBBBB");
-        uint256 id3 = nft.mintDescent(player, SAMPLE_GLYPH, "j3", SAMPLE_CID, "CCCCCC");
+        uint256 id1 = nft.mintDescent(p1, SAMPLE_GLYPH, "j1", SAMPLE_CID, "AAAAAA");
+        uint256 id2 = nft.mintDescent(p2, SAMPLE_GLYPH, "j2", SAMPLE_CID, "BBBBBB");
+        uint256 id3 = nft.mintDescent(p3, SAMPLE_GLYPH, "j3", SAMPLE_CID, "CCCCCC");
         vm.stopPrank();
         assertEq(id1, 1);
         assertEq(id2, 2);
         assertEq(id3, 3);
+    }
+
+    // -------------------------------------------------------------------------
+    // Supply cap + per-wallet limit
+    // -------------------------------------------------------------------------
+
+    function test_constants_maxSupplyIs250() public view {
+        assertEq(nft.MAX_SUPPLY(), 250);
+    }
+
+    function test_mintDescent_revertsOverMaxSupply() public {
+        // Mint MAX_SUPPLY (250) tokens to 250 different addresses.
+        vm.startPrank(bridge);
+        for (uint256 i = 1; i <= 250; i++) {
+            address to = address(uint160(0x1000 + i));
+            nft.mintDescent(to, SAMPLE_GLYPH, "j", SAMPLE_CID, "AAAAAA");
+        }
+        assertEq(nft.lastTokenId(), 250);
+        // 251st mint to a fresh address must revert.
+        address overflowTo = address(uint160(0x9999));
+        vm.expectRevert(bytes("max supply"));
+        nft.mintDescent(overflowTo, SAMPLE_GLYPH, "j", SAMPLE_CID, "AAAAAA");
+        vm.stopPrank();
+    }
+
+    function test_mintDescent_revertsOnSecondMintToSameAddress() public {
+        vm.startPrank(bridge);
+        nft.mintDescent(player, SAMPLE_GLYPH, SAMPLE_JOURNAL, SAMPLE_CID, SAMPLE_CODE);
+        vm.expectRevert(bytes("already minted"));
+        nft.mintDescent(player, SAMPLE_GLYPH, SAMPLE_JOURNAL, SAMPLE_CID, "ZZZZZZ");
+        vm.stopPrank();
+    }
+
+    function test_mintDescent_secondMintAfterTransferStillReverts() public {
+        // The hasMinted flag is permanent. Transferring the token away
+        // doesn't reset eligibility — same address still cannot mint again.
+        address other = makeAddr("other");
+        vm.prank(bridge);
+        nft.mintDescent(player, SAMPLE_GLYPH, SAMPLE_JOURNAL, SAMPLE_CID, SAMPLE_CODE);
+
+        vm.prank(player);
+        nft.transferFrom(player, other, 1);
+        assertEq(nft.balanceOf(player), 0, "player should hold 0 after transfer");
+        assertTrue(nft.hasMinted(player), "hasMinted flag should persist");
+
+        vm.expectRevert(bytes("already minted"));
+        vm.prank(bridge);
+        nft.mintDescent(player, SAMPLE_GLYPH, SAMPLE_JOURNAL, SAMPLE_CID, "ZZZZZZ");
+    }
+
+    function test_hasMinted_setOnFirstMint() public {
+        assertFalse(nft.hasMinted(player), "starts unminted");
+        vm.prank(bridge);
+        nft.mintDescent(player, SAMPLE_GLYPH, SAMPLE_JOURNAL, SAMPLE_CID, SAMPLE_CODE);
+        assertTrue(nft.hasMinted(player), "set after first mint");
     }
 
     // -------------------------------------------------------------------------
