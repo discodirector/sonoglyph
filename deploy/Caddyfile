@@ -70,3 +70,24 @@ sonoglyph.xyz, www.sonoglyph.xyz {
 		level INFO
 	}
 }
+
+# Documentation site — Astro Starlight static build at /srv/sonoglyph/docs/dist.
+# Same TLS automation as the apex; Caddy handles the cert as long as the DNS
+# A record for docs.sonoglyph.xyz points at this host.
+#
+# No reverse_proxy here — the docs site is fully static. `try_files` falls
+# back to /index.html so client-side routing (if Starlight ever adds it) and
+# trailing-slash variants both resolve.
+docs.sonoglyph.xyz {
+	encode zstd gzip
+
+	root * /srv/sonoglyph/docs/dist
+	try_files {path} {path}/ /index.html
+	file_server
+
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}

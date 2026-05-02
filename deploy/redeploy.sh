@@ -7,12 +7,15 @@
 # What it does:
 #   1. Web rebuild via `npm run build`. Caddy serves /srv/sonoglyph/web/dist
 #      directly, so the build IS the deploy — no rsync to /var/www.
-#   2. Bridge restart via systemd. The proxy runs `tsx src/index.ts`,
+#   2. Docs rebuild (Astro Starlight) via `npm run build`. Caddy serves
+#      /srv/sonoglyph/docs/dist on docs.sonoglyph.xyz. Skipped silently
+#      if the docs/ folder doesn't exist (older checkouts).
+#   3. Bridge restart via systemd. The proxy runs `tsx src/index.ts`,
 #      which reads sources fresh on each start, so a service restart
 #      picks up any proxy/src/*.ts changes.
-#   3. Caddyfile sync if it drifted from the version in the repo, plus
+#   4. Caddyfile sync if it drifted from the version in the repo, plus
 #      `caddy reload` (graceful, no dropped connections).
-#   4. Health check against the public domain — confirms TLS, Caddy,
+#   5. Health check against the public domain — confirms TLS, Caddy,
 #      and the bridge process are all reachable end-to-end.
 #
 # Why a single script: the previous workflow had a build step and a
@@ -30,6 +33,18 @@ cd "$REPO"
 
 echo "[deploy] building web..."
 ( cd web && npm run build )
+
+if [ -d docs ]; then
+  echo "[deploy] building docs..."
+  # First-time deploys won't have docs/node_modules yet; install if missing.
+  # We don't have a lockfile yet (the scaffold was created with --no-install)
+  # so `npm install` it is — once a package-lock.json is committed, switch
+  # to `npm ci` for reproducible installs.
+  ( cd docs && [ -d node_modules ] || npm install ) \
+    && ( cd docs && npm run build )
+else
+  echo "[deploy] no docs/ folder — skipping docs build"
+fi
 
 echo "[deploy] restarting bridge..."
 systemctl restart sonoglyph-bridge.service

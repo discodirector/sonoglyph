@@ -1,0 +1,67 @@
+---
+title: Sonoglyph
+description: Descend with Hermes. Carve a sonoglyph. Mint it on Monad.
+template: splash
+hero:
+  tagline: A turn-based ambient/noise descent. You and the Hermes Agent sculpt the piece together. Kimi reads the log and writes a poetic field journal plus an ASCII glyph. The whole thing is recorded, pinned to IPFS, and minted on Monad mainnet with the glyph rendered fully on-chain.
+  actions:
+    - text: How a descent works
+      link: /overview/descent/
+      icon: right-arrow
+    - text: Run it locally
+      link: /run/local/
+      icon: external
+      variant: minimal
+    - text: Live site
+      link: https://sonoglyph.xyz
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## Where to start
+
+<CardGrid stagger>
+  <LinkCard
+    title="What is Sonoglyph"
+    description="The pitch in 60 seconds — what you do, who Hermes is, why the output is unique per session."
+    href="/overview/what/"
+  />
+  <LinkCard
+    title="How a descent works"
+    description="The six stages of a single descent: pairing → begin → 15 turns → fade → Kimi → mint."
+    href="/overview/descent/"
+  />
+  <LinkCard
+    title="Architecture"
+    description="Frontend, bridge/proxy, MCP, and contract — what runs where, and the flow between them."
+    href="/overview/architecture/"
+  />
+  <LinkCard
+    title="Per-session randomization"
+    description="Why no two descents sound the same. 96 (root, mode) starting points, plus per-layer pitch picking."
+    href="/composition/randomization/"
+  />
+  <LinkCard
+    title="The agent"
+    description="The MCP tool surface Hermes uses and how it reasons about pitch in the descent's key."
+    href="/agent/mcp/"
+  />
+  <LinkCard
+    title="Artifacts (Kimi)"
+    description="Journal generation rules and the best-of-3 glyph scoring pipeline."
+    href="/artifacts/journal/"
+  />
+</CardGrid>
+
+## Built for the Hermes Agent Creative Hackathon
+
+Submission for the **Hermes Agent Creative Hackathon** (Nous Research × Kimi).
+The agent the player hears is *their own* Hermes, running locally on their
+machine, talking to the bridge over MCP. There is no server-side LLM call
+during gameplay.
+
+- Live: [sonoglyph.xyz](https://sonoglyph.xyz)
+- Chain: Monad mainnet (143)
+- Source: [github.com/discodirector/sonoglyph](https://github.com/discodirector/sonoglyph)

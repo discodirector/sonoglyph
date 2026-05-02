@@ -1,0 +1,44 @@
+/* Sonoglyph docs — minor palette tweaks to match the experience.
+ *
+ * The live site (sonoglyph.xyz) uses a near-black background with muted
+ * grey accents (#aab0a8 track gray, #6a6660 label gray, #d8d4cf text).
+ * Starlight's default dark theme is a saturated blue-grey, which clashes.
+ * Re-grounding the dark palette toward neutrals brings the docs in line
+ * with the descent UI without rebuilding theme tokens from scratch.
+ *
+ * We touch only the two pieces that show up most: the page background
+ * and the accent colour used for links + active sidebar items. Everything
+ * else inherits Starlight defaults so future upgrades don't drift.
+ */
+
+:root {
+	/* Accent — slightly warm gray-green pulled from the in-game label
+	 * colour. Starlight uses this for links, focus rings, and the active
+	 * sidebar item. */
+	--sl-color-accent-low: #2a2c28;
+	--sl-color-accent: #aab0a8;
+	--sl-color-accent-high: #d8d4cf;
+}
+
+:root[data-theme='dark'] {
+	/* Page chrome — pure greyscale with a faint warm bias. Pulls the docs
+	 * away from Starlight's default cool indigo and toward the cave-stone
+	 * palette of the descent. */
+	--sl-color-bg: #0a0a0c;
+	--sl-color-bg-nav: #0a0a0c;
+	--sl-color-bg-sidebar: #0a0a0c;
+	--sl-color-text: #d8d4cf;
+	--sl-color-text-accent: #d8d4cf;
+	--sl-color-gray-1: #e8e4df;
+	--sl-color-gray-2: #c4c0bb;
+	--sl-color-gray-3: #8a8680;
+	--sl-color-gray-4: #5a5650;
+	--sl-color-gray-5: #3a3632;
+	--sl-color-gray-6: #1f1d1b;
+	--sl-color-black: #050507;
+}
+
+/* Inline code — slightly darker than the page so it reads as a chip. */
+:root[data-theme='dark'] code {
+	background: #1a1816;
+}
