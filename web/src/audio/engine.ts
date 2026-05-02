@@ -588,9 +588,10 @@ function buildDrone(freq: number): PresetBuild {
   // exactly env × 1.0 and trough is env × 0.6.
   //
   // Peak instantaneous gain: 0.26138 × 1.0 = 0.26138 at the breath
-  // LFO apex (during the t=1 s peak of the envelope); trough during
-  // peak phase: 0.26138 × 0.6 = 0.157. The masterLimiter at −1 dBFS
-  // is the backstop for the sum-of-peaks worst case.
+  // LFO apex (during the t=5 s wave-1 peak of the envelope; later
+  // waves cap at 0.75× and 0.40× of that). Trough during peak phase:
+  // 0.26138 × 0.6 = 0.157. The masterLimiter at −1 dBFS is the
+  // backstop for the sum-of-peaks worst case.
   const env = new Tone.Gain(0);
 
   // NEW (A, fixed): amplitude breath. Slow LFO modulating a multiplier
@@ -738,35 +739,44 @@ function buildDrone(freq: number): PresetBuild {
   sub.start();
   octUp.start();
 
-  // Multi-stage envelope giving drone an audible shape rather than a
-  // constant presence:
+  // Multi-stage envelope — three waves of decreasing amplitude, each
+  // shaped as attack-and-decay, giving the drone audible 90-second
+  // arc rather than a constant presence:
   //
-  //    t=0    t=1     t=26          t=36           t=61
-  //     │      │       │             │              │
-  //     0 ───→ peak ──→ 0 ──────────→ peak/2 ──────→ 0
-  //            │        │             │              │
-  //            1 s atk  25 s decay    10 s re-atk    25 s dissolve
+  //      t=0     t=5    t=25    t=35    t=55    t=70    t=90
+  //       │       │      │       │       │       │       │
+  //       0 ────→ 1.00 → 0 ───→ 0.75 → 0 ───→ 0.40 → 0     (× peak)
+  //               │      │      │      │      │      │
+  //               5 s    20 s   10 s   20 s   15 s   20 s
+  //               atk    decay  atk    decay  atk    decay
   //
-  // Listener intent: drone becomes a shaped event with a slow rebound
-  // echo, not background music. The re-attack is 10 s (NOT a pop) so
-  // the second wave reads as the cave breathing back, not a second
-  // hit. After ~61 s the voice naturally fades to silence; the layer
-  // object stays alive (Web Audio nodes don't get torn down) so the
-  // listener can place a second drone later in the descent for
-  // another wave, by choice rather than by default.
+  // Three waves, each smaller and with a longer attack than the last:
+  // wave 1 punches in at 5 s, wave 2 takes 10 s to crest at 75 %,
+  // wave 3 takes 15 s to crest at 40 %. The ramping attack times +
+  // shrinking peaks make each successive wave read as the cave
+  // "answering more softly" than the previous one. After t=90 s the
+  // drone is silent for the rest of its existence; the layer object
+  // stays alive so the listener can place another drone for another
+  // arc, by choice rather than by default.
+  //
+  // Total drone life: 90 s. Previously 61 s (1+25+10+25); the
+  // listener wanted longer perceptible presence, hence the ramping
+  // attack times that stretch each wave's perceptible duration.
   //
   // Linear ramps (not exponential) so the drone audibly persists
-  // through the full 25 s decay rather than dropping by half in
+  // through each full 20 s decay rather than dropping by half in
   // the first few seconds. With breath LFO multiplying on top
   // (range 0.6–1.0 over 13–40 s), the linear decay reads as
   // "fading while still breathing" instead of dead-flat ramp.
   const peak = 0.26138;
   const t0 = Tone.now();
   env.gain.setValueAtTime(0, t0);
-  env.gain.linearRampToValueAtTime(peak, t0 + 1);          //  1 s attack
-  env.gain.linearRampToValueAtTime(0, t0 + 26);            // 25 s decay
-  env.gain.linearRampToValueAtTime(peak * 0.5, t0 + 36);   // 10 s re-attack
-  env.gain.linearRampToValueAtTime(0, t0 + 61);            // 25 s dissolve
+  env.gain.linearRampToValueAtTime(peak, t0 + 5);                //  5 s attack    (wave 1, 100%)
+  env.gain.linearRampToValueAtTime(0, t0 + 25);                  // 20 s decay
+  env.gain.linearRampToValueAtTime(peak * 0.75, t0 + 35);        // 10 s attack    (wave 2,  75%)
+  env.gain.linearRampToValueAtTime(0, t0 + 55);                  // 20 s decay
+  env.gain.linearRampToValueAtTime(peak * 0.40, t0 + 70);        // 15 s attack    (wave 3,  40%)
+  env.gain.linearRampToValueAtTime(0, t0 + 90);                  // 20 s dissolve
 
   return {
     output: breath,
