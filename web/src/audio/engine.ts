@@ -180,6 +180,26 @@ export async function initAudio(): Promise<void> {
     typeBuses.set(type, bus);
   }
 
+  // Drone-specific extra reverb send. Drone is the cathedral atmosphere
+  // voice and gets ~2× the wet of other layers (in addition to the shared
+  // depth-modulated reverbSend above). Tap point is the drone typeBus —
+  // crucially NOT the layer's `breath` output directly. Reason: tapping
+  // breath bypasses the typeBus.gain stage, so when the EQ panel mutes
+  // drone (typeBus.gain → 0), drone signal still leaks into the reverb
+  // tail through this dedicated path. Routing via the typeBus means the
+  // mute zeros every downstream branch, including this one.
+  //
+  // Single Gain shared across all drone instances (vs the previous
+  // per-instance node). Drones place into the same typeBus and the
+  // typeBus output is what feeds the reverb here; no need for an
+  // instance-level node.
+  const droneBus = typeBuses.get('drone');
+  if (droneBus) {
+    const droneReverbBoost = new Tone.Gain(0.5);
+    droneBus.connect(droneReverbBoost);
+    droneReverbBoost.connect(reverb);
+  }
+
   // Pads bus — single shared bus for all three atmospheric pad voices.
   // Gain 0.45 (was 0.7) — pads are background atmosphere, not lead voices,
   // and the previous 0.7 was loud enough to compete with placed layers
@@ -548,24 +568,29 @@ function buildDrone(freq: number): PresetBuild {
   // 'deep' drops to 0.15 so the high mid is barely present.
   const octUpAtten = new Tone.Gain(profile.octUpGain);
 
-  // env — ramps from 0 to 0.32673 over 4 s. Cumulative chain across
-  // volume passes: 0.16 → 0.112 → 0.0896 → 0.07168 → 0.055 → 0.06875
-  // → 0.0859 → 0.1117 → 0.16755 → 0.21782 → 0.32673 (latest pass
-  // +50%, applied together with the breath-LFO range fix below).
+  // env — multi-stage envelope (see schedule below at the bottom of
+  // buildDrone). Peak value is 0.26138.
   //
-  // Why this pass is finally enough: the previous +50%/+30% bumps
-  // could not actually land because the breath LFO was overwriting
-  // breath.gain to oscillate −0.15 … +0.15 (Tone.Signal connections
-  // OVERRIDE AudioParams, not sum with them — see breath block). The
-  // drone was therefore running at |sin| × 0.15 average ≈ 0.095×
-  // env, plus zero-crossing every half-period giving the perceived
-  // "drone disappears for 3 seconds" complaint. With the LFO range
-  // corrected to 0.6 … 1.0 the env target now means what it says.
+  // Cumulative volume chain across all passes:
+  //   0.16 → 0.112 → 0.0896 → 0.07168 → 0.055 → 0.06875 → 0.0859
+  //   → 0.1117 → 0.16755 → 0.21782 → 0.32673 → 0.26138
+  // (last step −20 % off the post-LFO-fix peak, listener report:
+  //  drone now lands too loud after the breath bug fix corrected the
+  //  effective gain by a factor of ≈22×).
   //
-  // Peak instantaneous gain: 0.32673 × 1.0 = 0.32673 at the breath
-  // LFO apex; trough: 0.32673 × 0.6 = 0.196. Plus the sub/octUp/dry
-  // mix internal sum at construction. The masterLimiter at −1 dBFS
-  // is the backstop that lets us run this hot.
+  // Why the +50 %/+30 % bumps before the LFO fix were ineffective:
+  // the breath LFO was overwriting breath.gain to oscillate
+  // −0.15 … +0.15 (Tone.Signal connections OVERRIDE AudioParams, not
+  // sum with them — see breath block). The drone therefore ran at
+  // |sin| × 0.15 ≈ 0.095× env on average, with zero-crossing every
+  // half-period producing the "drone disappears for 3 seconds"
+  // complaint. With the LFO range corrected to 0.6 … 1.0, peak is
+  // exactly env × 1.0 and trough is env × 0.6.
+  //
+  // Peak instantaneous gain: 0.26138 × 1.0 = 0.26138 at the breath
+  // LFO apex (during the t=1 s peak of the envelope); trough during
+  // peak phase: 0.26138 × 0.6 = 0.157. The masterLimiter at −1 dBFS
+  // is the backstop for the sum-of-peaks worst case.
   const env = new Tone.Gain(0);
 
   // NEW (A, fixed): amplitude breath. Slow LFO modulating a multiplier
@@ -655,30 +680,47 @@ function buildDrone(freq: number): PresetBuild {
 
   env.connect(breath);
 
-  // Dedicated extra reverb send — drone gets MORE wet than other layers.
-  // Reasoning: drone is the cathedral atmosphere voice, placed once and
-  // sustained. The shared typeBus → reverbSend → reverb path delivers
-  // ~0.30–0.85× wet (depth-modulated). Tapping breath directly into
-  // `reverb` at 0.5 adds a second wet contribution, so drone's total
-  // wet sits at 0.8–1.35× while other layers stay at the 0.3–0.85× the
-  // shared send provides. The point is to push drone from "endless
-  // triangle" toward "voice played inside the architecture" — the
-  // listener report flagged drone as "звучит неинтересно, как
-  // бесконечная пила" and a wet bump is the cheapest way to add the
-  // motion that the in-cave acoustic gives for free.
-  //
-  // Connecting straight to `reverb` (not via `reverbSend`) bypasses the
-  // depth-scaling ramp, so the boost stays constant through the descent.
-  // That's intentional: the typeBus path already carries the depth
-  // ramp; this dedicated send is a fixed identity layer on top.
-  const droneReverbBoost = new Tone.Gain(0.5);
-  breath.connect(droneReverbBoost);
-  droneReverbBoost.connect(reverb);
+  // Note: the drone-specific extra reverb send is set up ONCE in
+  // initAudio (tapped from the drone typeBus), not per instance here.
+  // Earlier version tapped `breath` directly into reverb, which leaked
+  // past the typeBus mute — drone kept feeding the reverb tail even
+  // when the EQ slider was at 0. The shared per-type send fixes that
+  // and also avoids growing/disposing a Gain node on every drone
+  // placement. See typeBuses block in initAudio.
 
   osc.start();
   sub.start();
   octUp.start();
-  env.gain.rampTo(0.32673, 4);
+
+  // Multi-stage envelope giving drone an audible shape rather than a
+  // constant presence:
+  //
+  //    t=0    t=1     t=26          t=36           t=61
+  //     │      │       │             │              │
+  //     0 ───→ peak ──→ 0 ──────────→ peak/2 ──────→ 0
+  //            │        │             │              │
+  //            1 s atk  25 s decay    10 s re-atk    25 s dissolve
+  //
+  // Listener intent: drone becomes a shaped event with a slow rebound
+  // echo, not background music. The re-attack is 10 s (NOT a pop) so
+  // the second wave reads as the cave breathing back, not a second
+  // hit. After ~61 s the voice naturally fades to silence; the layer
+  // object stays alive (Web Audio nodes don't get torn down) so the
+  // listener can place a second drone later in the descent for
+  // another wave, by choice rather than by default.
+  //
+  // Linear ramps (not exponential) so the drone audibly persists
+  // through the full 25 s decay rather than dropping by half in
+  // the first few seconds. With breath LFO multiplying on top
+  // (range 0.6–1.0 over 13–40 s), the linear decay reads as
+  // "fading while still breathing" instead of dead-flat ramp.
+  const peak = 0.26138;
+  const t0 = Tone.now();
+  env.gain.setValueAtTime(0, t0);
+  env.gain.linearRampToValueAtTime(peak, t0 + 1);          //  1 s attack
+  env.gain.linearRampToValueAtTime(0, t0 + 26);            // 25 s decay
+  env.gain.linearRampToValueAtTime(peak * 0.5, t0 + 36);   // 10 s re-attack
+  env.gain.linearRampToValueAtTime(0, t0 + 61);            // 25 s dissolve
 
   return {
     output: breath,
@@ -703,7 +745,6 @@ function buildDrone(freq: number): PresetBuild {
           oscAtten.dispose();
           env.dispose();
           breath.dispose();
-          droneReverbBoost.dispose();
         } catch {
           /* already disposed */
         }
