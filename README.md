@@ -373,6 +373,12 @@ mint, and it mints to the player's chosen address. We trade
 trustlessness for curation — every minted token came from a real
 completed descent the bridge witnessed end-to-end.
 
+Supply policy: hard-capped at **250 tokens** for the lifetime of the
+contract (`MAX_SUPPLY` constant, no setter). Each address can ever
+receive **at most one** Sonoglyph (`hasMinted` mapping, lifetime flag —
+transferring the token away does not reset eligibility). 250 distinct
+descents, 250 distinct holders.
+
 ---
 
 ## Layout

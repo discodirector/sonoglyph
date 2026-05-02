@@ -86,6 +86,31 @@ We trade trustlessness for curation — every minted token came from
 a real completed descent the bridge witnessed end-to-end. If the bridge wallet is ever compromised
 the worst case is junk tokens, not stolen ones.
 
+## Supply policy
+
+Sonoglyph is a **finite series**, hard-capped at the contract level.
+
+| Rule | Where it lives | What it means |
+|------|----------------|---------------|
+| `MAX_SUPPLY = 250` | Solidity `constant` | The 251st `mintDescent` call reverts with `"max supply"`. There is **no setter**, not even owner-only — the cap is part of the deployed bytecode for the lifetime of the contract. |
+| One mint per address | `mapping(address => bool) hasMinted` | The same address can ever receive **at most one** Sonoglyph. The 2nd call to `mintDescent(sameAddress, …)` reverts with `"already minted"`. |
+| Lifetime flag | `hasMinted[to] = true` (irreversible) | Transferring the token away does **not** reset eligibility. Once an address is in `hasMinted`, it stays there forever, even with a zero-balance after transfer. |
+
+Together these turn the on-chain set into a small, distributed
+record: 250 distinct descents, 250 distinct holders. A single collector
+cannot accumulate the series via a recipient-wallet farm — they would
+need 250 unique signing wallets to receive the series, and even then
+the bridge wallet would have to mint to each of them on completed
+descents the bridge witnessed.
+
+Reads:
+
+```solidity
+uint256 public constant MAX_SUPPLY;          // 250
+mapping(address => bool) public hasMinted;   // recipient → has ever received
+uint256 public lastTokenId;                  // 1-indexed; tokens left = MAX_SUPPLY - lastTokenId
+```
+
 ## Cost
 
 Per mint on Monad mainnet, with current gas levels, a Sonoglyph mint

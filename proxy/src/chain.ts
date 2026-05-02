@@ -1,6 +1,7 @@
 /**
  * On-chain minter — viem wrapper around the Sonoglyph ERC-721 deployed on
- * Monad testnet.
+ * Monad mainnet (chain id 143). MONAD_CHAIN_ID can override to testnet
+ * (10143) for local dev / replay; default is mainnet.
  *
  * The bridge holds DEPLOYER_PRIVATE_KEY (which is the contract's owner) and
  * is therefore the ONLY address authorized to call mintDescent. Players
@@ -8,6 +9,14 @@
  * Sonoglyph", and we do the rest. Trade-off documented in the contract
  * README: trustful, curated, but every minted token is provably from a
  * real descent the bridge witnessed end-to-end.
+ *
+ * Contract enforces a lifetime supply cap of 250 tokens AND a one-mint-
+ * per-address rule. Both are checked inside mintDescent and surface as
+ * revert reasons "max supply" / "already minted" — viem catches them
+ * during simulateContract below; the message propagates up to the /mint
+ * handler in index.ts, which currently returns 500 with the message in
+ * the body. Frontend's Finale panel surfaces the revert reason verbatim,
+ * so the player sees the specific cause.
  *
  * Lazy init: we don't construct the wallet client until /mint is first
  * called. That way the bridge starts cleanly even before the operator has

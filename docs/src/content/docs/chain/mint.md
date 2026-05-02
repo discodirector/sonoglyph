@@ -77,10 +77,26 @@ page reload does).
 
 ### Mint tx reverts
 
-Most likely cause: the bridge wallet's nonce or balance is off.
-The bridge logs the revert reason and returns a 500. The player
-sees a "mint failed, contact us" UI. We've never seen this in
-production but the path exists.
+Most likely causes:
+
+- **`already minted`** — the recipient address (`to`) has previously
+  received a Sonoglyph. Each address can only ever hold one token from
+  the series; the contract enforces this permanently via a lifetime
+  flag (transferring the token away doesn't reset eligibility). The
+  bridge surfaces this as a 4xx with the revert reason so the UI can
+  show "this wallet already has a Sonoglyph — try a different
+  address".
+- **`max supply`** — the 250-token series is exhausted. After the
+  250th mint, `mintDescent` reverts permanently with this message.
+  The descent recording, journal, and glyph still exist (bridge
+  logs + Pinata), and the player can save them off-chain, but no
+  further on-chain mints are possible.
+- Nonce or balance issues on the bridge wallet — operational, not a
+  contract constraint. Bridge logs the revert reason and returns 500.
+
+The bridge re-validates the session by `sessionCode` before
+broadcasting, so a stale or unknown session also fails fast — this
+isn't a chain revert, just a 4xx from the bridge.
 
 ### Kimi fails after the 15th layer
 
