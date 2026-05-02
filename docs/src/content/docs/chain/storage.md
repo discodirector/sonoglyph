@@ -83,14 +83,8 @@ function mintDescent(
 ```
 
 We trade trustlessness for curation — every minted token came from
-a real completed descent the bridge witnessed end-to-end. There's
-no "mint anything" path. If the bridge wallet is ever compromised
+a real completed descent the bridge witnessed end-to-end. If the bridge wallet is ever compromised
 the worst case is junk tokens, not stolen ones.
-
-The bridge wallet's private key lives in `MINT_PRIVATE_KEY` on the
-VPS, only readable by the bridge process. It's a hot wallet by
-necessity — minting needs to happen mid-descent without human
-intervention.
 
 ## Cost
 
