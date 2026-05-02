@@ -3,7 +3,7 @@
  *
  * Signal graph:
  *
- *   per-layer preset → Panner3D ─┬─→ master (Limiter)
+ *   per-layer preset → Panner3D ─┬─→ master (Gain)
  *                                └─→ reverbSend → reverb → master
  *                                                              │
  *   master ──────────────────────────────────► analyser (pre-voice, layers only)
@@ -12,8 +12,8 @@
  *   masterDuck (Gain — ramped down during voice playback)
  *      │
  *      ▼
- *   masterMix (Gain) ───┬─→ destination
- *                       └─→ recorder (full mix incl. voice)
+ *   masterMix (Gain) ───┬─→ masterLimiter (-1 dBFS) → destination
+ *                       └─→ recorder (pre-limiter; full mix incl. voice)
  *      ▲
  *      │
  *   voiceGain ◄─── Web Audio MediaElementSource (TTS playback)
@@ -67,6 +67,12 @@ let master: Tone.Gain;
 // let masterHpf: Tone.Filter;
 let masterDuck: Tone.Gain;
 let masterMix: Tone.Gain;
+// masterLimiter — restored after the click cause was traced to Panner3D
+// HRTF mode + 60 Hz listener updates (NOT the limiter as originally
+// suspected). Now sits between masterMix and destination, catching
+// peaks at −1 dBFS. Recorder taps masterMix UPSTREAM of the limiter
+// so recordings keep the full pre-limit dynamic range.
+let masterLimiter: Tone.Limiter;
 let voiceGain: Tone.Gain;
 let reverb: Tone.Reverb;
 let reverbSend: Tone.Gain;
@@ -97,8 +103,15 @@ export async function initAudio(): Promise<void> {
 
   Tone.getDestination().volume.value = -6;
 
-  // Final summing point — feeds destination + recorder.
-  masterMix = new Tone.Gain(1).toDestination();
+  // Final summing point — feeds masterLimiter (→ destination) + recorder.
+  // masterLimiter is at −1 dBFS, so any peak that pokes above ≈0.891 at
+  // masterMix's output gets clamped before it hits the speakers. This is
+  // the safety net that lets the per-layer mix run hot without the
+  // March/April series of "still too quiet" bumps risking digital clip.
+  masterMix = new Tone.Gain(1);
+  masterLimiter = new Tone.Limiter(-1);
+  masterMix.connect(masterLimiter);
+  masterLimiter.toDestination();
 
   // Layers route: master → masterDuck → masterMix.
   //
@@ -127,7 +140,15 @@ export async function initAudio(): Promise<void> {
   // playback chain. We can re-add subsonic mitigation later via
   // per-preset HPFs (one-pole, no z-state issue) if the listener
   // reports cone-flap returning.
-  master = new Tone.Gain(0.9);
+  //
+  // Gain bumped 0.9 → 1.4 (×1.55, ≈ +3.8 dB) to address the listener's
+  // "65% on speakers should feel like 100% does now" complaint. The −6 dB
+  // destination volume above + masterLimiter at −1 dBFS keep this safe:
+  // per-layer peaks summing through master at 1.4 still have ≈0.5×
+  // headroom before the limiter catches them, and the limiter prevents
+  // the sum-of-peaks worst case (drone+chord+pads coinciding) from
+  // hard-clipping the destination. See masterLimiter declaration above.
+  master = new Tone.Gain(1.4);
   masterDuck = new Tone.Gain(1);
   master.connect(masterDuck);
   masterDuck.connect(masterMix);
@@ -527,36 +548,58 @@ function buildDrone(freq: number): PresetBuild {
   // 'deep' drops to 0.15 so the high mid is barely present.
   const octUpAtten = new Tone.Gain(profile.octUpGain);
 
-  // env — ramps from 0 to 0.21782 over 4 s. Cumulative chain across
+  // env — ramps from 0 to 0.32673 over 4 s. Cumulative chain across
   // volume passes: 0.16 → 0.112 → 0.0896 → 0.07168 → 0.055 → 0.06875
-  // → 0.0859 → 0.1117 → 0.16755 → 0.21782 (fourth pass +50%, fifth
-  // pass +30% — the +30% is the latest "raise everything except pads"
-  // request, applied after the rolloffFactor=0 fix kept drone present
-  // through the descent but the bed still felt slightly under-loud in
-  // absolute terms). The breath stage below modulates POST-env, so
-  // this is the average gain — peak swings up to 0.21782 × 1.15 =
-  // 0.250 at the breath LFO apex.
+  // → 0.0859 → 0.1117 → 0.16755 → 0.21782 → 0.32673 (latest pass
+  // +50%, applied together with the breath-LFO range fix below).
+  //
+  // Why this pass is finally enough: the previous +50%/+30% bumps
+  // could not actually land because the breath LFO was overwriting
+  // breath.gain to oscillate −0.15 … +0.15 (Tone.Signal connections
+  // OVERRIDE AudioParams, not sum with them — see breath block). The
+  // drone was therefore running at |sin| × 0.15 average ≈ 0.095×
+  // env, plus zero-crossing every half-period giving the perceived
+  // "drone disappears for 3 seconds" complaint. With the LFO range
+  // corrected to 0.6 … 1.0 the env target now means what it says.
+  //
+  // Peak instantaneous gain: 0.32673 × 1.0 = 0.32673 at the breath
+  // LFO apex; trough: 0.32673 × 0.6 = 0.196. Plus the sub/octUp/dry
+  // mix internal sum at construction. The masterLimiter at −1 dBFS
+  // is the backstop that lets us run this hot.
   const env = new Tone.Gain(0);
 
-  // NEW (A): amplitude breath. Slow LFO modulating a multiplier post-env
-  // so the drone is no longer a flat-line gain after the ramp. Period
-  // 20–60 s with random initial phase — multiple drones drift relative
-  // to each other rather than pulsing in sync. Depth ±15% (≈ ±1.2 dB),
-  // chosen as the smallest depth audible as "breathing motion" rather
-  // than just "subtle wobble".
+  // NEW (A, fixed): amplitude breath. Slow LFO modulating a multiplier
+  // post-env so the drone is no longer a flat-line gain after the ramp.
+  //
+  // BUG history (now fixed): originally min/max were −0.15 / +0.15 with
+  // a `breath = Gain(1)` intrinsic, written under the assumption that
+  // the LFO would SUM with the intrinsic 1 to produce a 0.85 … 1.15
+  // multiplier. That assumption was wrong: Tone.Signal `.connect()` to
+  // an AudioParam OVERRIDES the param value (Tone clears the intrinsic
+  // and the Signal's output becomes the param's effective value). So
+  // breath.gain actually swung −0.15 … +0.15, twice crossing zero per
+  // period. Audible result: drone reduced to |sin| × 0.15 average gain,
+  // with full silence at every zero-crossing held for ~1–3 s before the
+  // amplitude crawled back. Listener report ("drone disappears for 3 s,
+  // slow to come back") matched exactly.
+  //
+  // Fix: min/max are now 0.6 … 1.0, treated as absolute multipliers
+  // (which is what Tone's override semantics actually deliver). Trough
+  // is 60 % of env (never silent), peak is unity. Period also dropped
+  // 1.5× (20–60 s → 13–40 s) per the same listener request that the
+  // breath cycle return to peak faster.
   //
   // Why post-env, not on env directly: env is being .rampTo()'d during
-  // start and dispose. Connecting an LFO to env.gain too would mean two
-  // sources writing the same AudioParam (additive sum tracks both ramp
-  // and LFO, which is fine in theory but harder to reason about).
-  // Splitting into env (ramp) and breath (LFO) keeps each stage doing
-  // exactly one thing.
+  // start and dispose. Connecting an LFO to env.gain too would mean the
+  // LFO override clobbers the rampTo schedule — start/dispose fades
+  // would no longer ramp, they'd snap to the LFO output. Keeping breath
+  // as a separate stage means env owns the ramp and breath owns the LFO.
   const breath = new Tone.Gain(1);
-  const breathPeriod = 20 + Math.random() * 40; // 20–60 s
+  const breathPeriod = 13 + Math.random() * 27; // 13–40 s (was 20–60 s; 1.5× faster)
   const breathLfo = new Tone.LFO({
     frequency: 1 / breathPeriod,
-    min: -0.15,
-    max: 0.15,
+    min: 0.6, // trough — drone audibly recedes but never falls silent
+    max: 1.0, // peak — env's full amplitude
     type: 'sine',
     phase: Math.random() * 360,
   });
@@ -612,10 +655,30 @@ function buildDrone(freq: number): PresetBuild {
 
   env.connect(breath);
 
+  // Dedicated extra reverb send — drone gets MORE wet than other layers.
+  // Reasoning: drone is the cathedral atmosphere voice, placed once and
+  // sustained. The shared typeBus → reverbSend → reverb path delivers
+  // ~0.30–0.85× wet (depth-modulated). Tapping breath directly into
+  // `reverb` at 0.5 adds a second wet contribution, so drone's total
+  // wet sits at 0.8–1.35× while other layers stay at the 0.3–0.85× the
+  // shared send provides. The point is to push drone from "endless
+  // triangle" toward "voice played inside the architecture" — the
+  // listener report flagged drone as "звучит неинтересно, как
+  // бесконечная пила" and a wet bump is the cheapest way to add the
+  // motion that the in-cave acoustic gives for free.
+  //
+  // Connecting straight to `reverb` (not via `reverbSend`) bypasses the
+  // depth-scaling ramp, so the boost stays constant through the descent.
+  // That's intentional: the typeBus path already carries the depth
+  // ramp; this dedicated send is a fixed identity layer on top.
+  const droneReverbBoost = new Tone.Gain(0.5);
+  breath.connect(droneReverbBoost);
+  droneReverbBoost.connect(reverb);
+
   osc.start();
   sub.start();
   octUp.start();
-  env.gain.rampTo(0.21782, 4);
+  env.gain.rampTo(0.32673, 4);
 
   return {
     output: breath,
@@ -640,6 +703,7 @@ function buildDrone(freq: number): PresetBuild {
           oscAtten.dispose();
           env.dispose();
           breath.dispose();
+          droneReverbBoost.dispose();
         } catch {
           /* already disposed */
         }
@@ -1172,10 +1236,10 @@ function buildChord(rootFreq: number): PresetBuild {
   // 0.17030, fourth pass at +30% "raise everything except pads"; now
   // sits at-or-above the original pre-cut peak level). Chord's internal
   // sum (root + 0.45-0.7×fifth + 0.25-0.55×oct ≈ 2.25 worst case)
-  // scaled by LFO peak: instantaneous peak ~0.383 at max — that's
-  // approaching the headroom ceiling. The limiter-restore advisory
-  // from the previous comment now applies in earnest; if any further
-  // bumps happen, restore the master Tone.Limiter before the bump.
+  // scaled by LFO peak: instantaneous peak ~0.383 at max. The advisory
+  // about restoring masterLimiter is now in effect — see initAudio,
+  // master is Gain(1.4) followed by Tone.Limiter(-1) so peaks above
+  // ≈0.891 at masterMix get clamped before the destination.
   const breathePeriod = 16 + Math.random() * 16;
   const breathePeak = 0.09464 + Math.random() * 0.07566;
   const breathe = new Tone.LFO({
@@ -1556,8 +1620,8 @@ function buildPadVoice(id: PadId, scale: SessionScalePublic): PadVoiceBuild {
  *  still under the placed-layer mix. Bumped +30% in the third volume
  *  pass alongside the layer presets so pads kept their relative weight
  *  in the bed. Sum of peaks (0.208+0.169+0.234 = 0.611) × padBus 0.45
- *  ≈ 0.275 peak into master — still comfortable headroom even though
- *  master is now Gain(0.9) rather than a Limiter. */
+ *  ≈ 0.275 peak into master — well within headroom now that
+ *  master is Gain(1.4) followed by masterLimiter at −1 dBFS. */
 const PAD_PEAK: Record<PadId, number> = {
   glow: 0.208, // 0.16 → 0.208 (+30%)
   air: 0.169,  // 0.13 → 0.169 (+30%)
