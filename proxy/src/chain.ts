@@ -64,6 +64,13 @@ export const SONOGLYPH_ABI = [
     outputs: [{name: '', type: 'uint256'}],
   },
   {
+    type: 'function',
+    name: 'MAX_SUPPLY',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{name: '', type: 'uint256'}],
+  },
+  {
     type: 'event',
     name: 'DescentMinted',
     inputs: [
@@ -263,6 +270,37 @@ export async function mintSonoglyph(args: MintArgs): Promise<MintResult> {
     gasUsed: receipt.gasUsed,
     contractAddress: ctx.contractAddress,
     chainId: ctx.walletClient.chain?.id ?? pickChain().id,
+  };
+}
+
+/**
+ * Supply snapshot — calls `lastTokenId()` and `MAX_SUPPLY()` on the live
+ * contract. Used by the /supply endpoint that powers the Finale screen's
+ * "EDITION X / 250" counter. The Promise.all keeps both reads in one
+ * round-trip to the RPC; both are pure view calls.
+ *
+ * MAX_SUPPLY is a constant in the deployed bytecode, so it never changes.
+ * lastTokenId increments on every successful mint. The /supply endpoint
+ * caches the result for a short window so the Finale screen doesn't
+ * hammer the RPC if multiple players reach the mint screen simultaneously.
+ */
+export async function getSupplyInfo(): Promise<{ minted: number; max: number }> {
+  const ctx = loadContext();
+  const [minted, max] = await Promise.all([
+    ctx.publicClient.readContract({
+      address: ctx.contractAddress,
+      abi: SONOGLYPH_ABI,
+      functionName: 'lastTokenId',
+    }),
+    ctx.publicClient.readContract({
+      address: ctx.contractAddress,
+      abi: SONOGLYPH_ABI,
+      functionName: 'MAX_SUPPLY',
+    }),
+  ]);
+  return {
+    minted: Number(minted),
+    max: Number(max),
   };
 }
 

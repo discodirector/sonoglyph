@@ -28,7 +28,7 @@ import { GameRegistry } from './registry.js';
 import { handleMcpRequest, disposeMcpForSession } from './mcp.js';
 import { generateFinalArtifact } from './kimi.js';
 import { pinFileToPinata } from './storage.js';
-import { chainConfigStatus, mintSonoglyph } from './chain.js';
+import { chainConfigStatus, mintSonoglyph, getSupplyInfo } from './chain.js';
 import { isAddress } from 'viem';
 import type { ClientMessage, ServerMessage } from './protocol.js';
 
@@ -69,6 +69,40 @@ app.get('/health', (c) => {
     },
     time: Date.now(),
   });
+});
+
+// -----------------------------------------------------------------------------
+// Supply snapshot — backs the Finale screen's "EDITION X / 250" counter.
+//
+// Cached for 15 s so a burst of Finale mounts (e.g. multiple players hitting
+// the mint screen simultaneously) doesn't hammer the RPC. lastTokenId only
+// changes on successful mint, so a 15 s window is plenty fresh — the player
+// who just minted gets their new tokenId from the /mint response directly,
+// not from /supply, and the Finale UI optimistically increments after a
+// successful mint anyway.
+//
+// Failure mode: if the chain is unreachable (RPC down, contract not yet
+// deployed, etc.), returns 503 with the error. The frontend treats this as
+// "supply unknown" and just hides the counter — the mint button still
+// works, since the contract enforces the cap regardless of UI hints.
+// -----------------------------------------------------------------------------
+let supplyCache: { value: { minted: number; max: number }; expiresAt: number } | null = null;
+const SUPPLY_CACHE_TTL_MS = 15_000;
+
+app.get('/supply', async (c) => {
+  const now = Date.now();
+  if (supplyCache && supplyCache.expiresAt > now) {
+    return c.json({ ...supplyCache.value, cached: true });
+  }
+  try {
+    const value = await getSupplyInfo();
+    supplyCache = { value, expiresAt: now + SUPPLY_CACHE_TTL_MS };
+    return c.json({ ...value, cached: false });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn('[supply] read failed:', message);
+    return c.json({ error: message }, 503);
+  }
 });
 
 // -----------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { isAddress } from 'viem';
 import { useSession } from '../state/useSession';
-import { mintDescent } from '../net/client';
+import { mintDescent, fetchSupply } from '../net/client';
 
 /**
  * Finale screen — shown after the final layer (MAX_LAYERS).
@@ -27,6 +27,25 @@ export function Finale() {
   const audioCid = useSession((s) => s.audioCid);
   const audioPinStatus = useSession((s) => s.audioPinStatus);
   const audioPinError = useSession((s) => s.audioPinError);
+  const setSupply = useSession((s) => s.setSupply);
+
+  // One-shot supply fetch on mount. The bridge caches for 15 s so this is
+  // cheap; we just want a snapshot the moment the player lands on Finale.
+  // Failures are silent — the UI hides the counter when supplyMinted is
+  // null, and the contract enforces the cap regardless of UI hints.
+  useEffect(() => {
+    let cancelled = false;
+    void fetchSupply()
+      .then((s) => {
+        if (!cancelled) setSupply(s.minted, s.max);
+      })
+      .catch((err) => {
+        console.warn('[finale] supply fetch failed', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [setSupply]);
 
   return (
     <div
@@ -206,12 +225,23 @@ function MintPanel() {
   const mintContractAddress = useSession((s) => s.mintContractAddress);
   const mintChainId = useSession((s) => s.mintChainId);
   const mintError = useSession((s) => s.mintError);
+  const supplyMinted = useSession((s) => s.supplyMinted);
+  const supplyMax = useSession((s) => s.supplyMax);
   const setMintPending = useSession((s) => s.setMintPending);
   const setMintSuccess = useSession((s) => s.setMintSuccess);
   const setMintError = useSession((s) => s.setMintError);
+  const bumpSupplyMinted = useSession((s) => s.bumpSupplyMinted);
 
   const [recipient, setRecipient] = useState('');
   const [walletNote, setWalletNote] = useState<string | null>(null);
+
+  // Edition counter — null until /supply resolves. Once both numbers are
+  // present, we know whether the series is exhausted (250 / 250). The
+  // contract reverts with "max supply" past that point, so we show a
+  // dedicated panel instead of the recipient input + button.
+  const supplyKnown = supplyMinted != null && supplyMax != null;
+  const exhausted =
+    supplyKnown && (supplyMinted as number) >= (supplyMax as number);
 
   // Silent auto-fill: ask window.ethereum for already-authorized accounts.
   // `eth_accounts` does NOT prompt — it returns [] if the user hasn't
@@ -251,6 +281,7 @@ function MintPanel() {
         txHash={mintTxHash}
         contractAddress={mintContractAddress}
         chainId={mintChainId}
+        supplyMax={supplyMax}
       />
     );
   }
@@ -284,6 +315,11 @@ function MintPanel() {
     try {
       const result = await mintDescent(code, trimmed);
       setMintSuccess(result);
+      // Optimistic +1 on the visible counter — only when the bridge actually
+      // broadcast a new tx. `cached: true` means the bridge replayed an
+      // already-stored result (page refresh / retry), in which case the
+      // /supply we fetched on Finale mount already includes that mint.
+      if (!result.cached) bumpSupplyMinted();
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
       setMintError(m);
@@ -291,6 +327,61 @@ function MintPanel() {
   };
 
   const pending = mintStatus === 'pending';
+
+  // ---- Exhausted state ----
+  // Series is sold out. Mint button hidden; contract would revert anyway.
+  // We still show the edition counter so the player understands why.
+  if (exhausted) {
+    return (
+      <div
+        style={{
+          marginTop: 4,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 10,
+          maxWidth: 520,
+          width: '100%',
+          fontFamily: 'ui-monospace, Menlo, monospace',
+        }}
+      >
+        <div
+          style={{
+            fontSize: 10,
+            letterSpacing: '0.3em',
+            color: '#6a6660',
+          }}
+        >
+          EDITION · {supplyMinted} / {supplyMax}
+        </div>
+        <div
+          style={{
+            fontSize: 13,
+            letterSpacing: '0.18em',
+            color: '#c9885b',
+            textTransform: 'uppercase',
+            marginTop: 6,
+          }}
+        >
+          Edition complete
+        </div>
+        <div
+          style={{
+            fontSize: 10,
+            letterSpacing: '0.05em',
+            color: '#a09d99',
+            textAlign: 'center',
+            maxWidth: 420,
+            lineHeight: 1.6,
+          }}
+        >
+          The 250-token series has been fully minted. Your descent is
+          recorded — the audio CID and journal are above. The on-chain
+          edition is closed.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -304,6 +395,19 @@ function MintPanel() {
         width: '100%',
       }}
     >
+      {supplyKnown && (
+        <div
+          style={{
+            fontSize: 10,
+            letterSpacing: '0.3em',
+            color: '#6a6660',
+            fontFamily: 'ui-monospace, Menlo, monospace',
+          }}
+        >
+          EDITION · {supplyMinted} / {supplyMax}
+        </div>
+      )}
+
       <div
         style={{
           fontSize: 10,
@@ -414,11 +518,13 @@ function MintSuccess({
   txHash,
   contractAddress,
   chainId,
+  supplyMax,
 }: {
   tokenId: string;
   txHash: string;
   contractAddress: string | null;
   chainId: number | null;
+  supplyMax: number | null;
 }) {
   // Two Monad explorers in active rotation:
   //   - monadexplorer.com — standard tx / address pages, works well for tx
@@ -470,6 +576,18 @@ function MintSuccess({
         }}
       >
         SONOGLYPH&nbsp;#{tokenId}
+        {supplyMax != null && (
+          <span
+            style={{
+              fontSize: 12,
+              letterSpacing: '0.2em',
+              color: '#6a6660',
+              marginLeft: 10,
+            }}
+          >
+            / {supplyMax}
+          </span>
+        )}
       </div>
       <div
         style={{

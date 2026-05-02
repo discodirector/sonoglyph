@@ -147,6 +147,11 @@ interface SessionState {
   mintContractAddress: string | null;
   mintChainId: number | null;
   mintError: string | null;
+  /** Live edition counter for the Finale screen. Both null = not yet
+   *  fetched (or fetch failed); the UI hides the counter in that state.
+   *  Populated by the Finale's mount-effect call to `/supply`. */
+  supplyMinted: number | null;
+  supplyMax: number | null;
   startedAt: number | null;
   log: SessionEvent[];
 
@@ -185,6 +190,13 @@ interface SessionState {
     chainId: number;
   }) => void;
   setMintError: (msg: string) => void;
+  /** Set both supply numbers from a /supply fetch. */
+  setSupply: (minted: number, max: number) => void;
+  /** Optimistic +1 on the minted count after a successful local mint. The
+   *  Finale UI uses this to update "EDITION X / 250" instantly without
+   *  waiting for the bridge's 15 s cache window to expire. No-op if
+   *  supplyMinted is null (we don't optimistically guess). */
+  bumpSupplyMinted: () => void;
   pushEvent: (e: PendingEvent) => void;
 }
 
@@ -222,6 +234,8 @@ export const useSession = create<SessionState>((set) => ({
   mintContractAddress: null,
   mintChainId: null,
   mintError: null,
+  supplyMinted: null,
+  supplyMax: null,
   startedAt: null,
   log: [],
 
@@ -316,6 +330,11 @@ export const useSession = create<SessionState>((set) => ({
       mintError: null,
     }),
   setMintError: (msg) => set({ mintStatus: 'error', mintError: msg }),
+  setSupply: (minted, max) => set({ supplyMinted: minted, supplyMax: max }),
+  bumpSupplyMinted: () =>
+    set((s) =>
+      s.supplyMinted == null ? {} : { supplyMinted: s.supplyMinted + 1 },
+    ),
   pushEvent: (e) =>
     set((s) => ({
       log: [...s.log, { ...e, t: relTime(s.startedAt) } as SessionEvent],

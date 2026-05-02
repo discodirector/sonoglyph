@@ -144,3 +144,35 @@ export async function mintDescent(
   }
   return (await res.json()) as MintResult;
 }
+
+/**
+ * Live supply snapshot for the Finale screen. Backed by the bridge's
+ * /supply endpoint, which reads `lastTokenId()` and `MAX_SUPPLY()` from
+ * the contract and caches for 15 s.
+ *
+ * Throws on any network or 5xx error. Caller (Finale) treats failure as
+ * "supply unknown" and hides the counter — the contract enforces the cap
+ * regardless of whether the UI surfaces it.
+ */
+export interface SupplyInfo {
+  minted: number;
+  max: number;
+  cached: boolean;
+}
+
+export async function fetchSupply(): Promise<SupplyInfo> {
+  const res = await fetch('/supply');
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const j = (await res.json()) as { error?: string };
+      detail = j?.error ?? '';
+    } catch {
+      /* ignore — body might not be JSON */
+    }
+    throw new Error(
+      `supply lookup failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`,
+    );
+  }
+  return (await res.json()) as SupplyInfo;
+}
