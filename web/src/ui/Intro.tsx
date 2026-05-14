@@ -207,9 +207,49 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
 }
 
 // -----------------------------------------------------------------------------
+// Voice / character presets the player can pick before spawning a shared
+// Hermes. Keys MUST match proxy/src/agents/spawn.ts:PERSONALITY_PROMPTS —
+// if the bridge sees an unknown key it returns 400. The blurbs here are
+// player-facing copy and are deliberately distinct from the prompt
+// sentences the agent itself receives; the agent's copy lives server-side
+// to keep prompt-engineering decisions colocated with the spawn logic.
+// -----------------------------------------------------------------------------
+const PERSONALITY_OPTIONS = [
+  {
+    key: 'sage',
+    label: 'Sage',
+    blurb: 'Quiet and reflective. Favours low, sustained tones; lets silences linger.',
+  },
+  {
+    key: 'trickster',
+    label: 'Trickster',
+    blurb: 'Playful and contrary. Jumps registers; answers with the unexpected.',
+  },
+  {
+    key: 'architect',
+    label: 'Architect',
+    blurb: 'Builds symmetry. Echoes intervals; rhymes with what you place.',
+  },
+  {
+    key: 'storm',
+    label: 'Storm',
+    blurb: 'Wide intervals, high contrast. Dramatic gestures and weighty comments.',
+  },
+] as const;
+
+type PersonalityOption = (typeof PERSONALITY_OPTIONS)[number];
+type PersonalityOptionKey = PersonalityOption['key'];
+
+// -----------------------------------------------------------------------------
 // "Play without your own agent" CTA — bridge spawns a Hermes process on the
 // VPS, paired to this session for up to 10 minutes. The button replaces
 // itself with a small spinner row while the HTTP request is in flight.
+//
+// Above the button sits a row of voice presets the player can pick from.
+// Sage is the default — most neutral musical bias, lowest "personality
+// pressure" on top of the base prompt. Switching pills updates a one-line
+// blurb under the row so the player knows what they're choosing without
+// any modal or tooltip lookup.
 //
 // Failure stays inline (small red caption below the button) rather than
 // going to a modal, so the player can retry with one click.
@@ -238,10 +278,15 @@ function SharedAgentButton({
   lastError: string | null;
 }) {
   const [hover, setHover] = useState(false);
+  const [selectedKey, setSelectedKey] =
+    useState<PersonalityOptionKey>('sage');
+  const selected =
+    PERSONALITY_OPTIONS.find((o) => o.key === selectedKey) ??
+    PERSONALITY_OPTIONS[0];
 
   const onClick = async () => {
     onRequesting();
-    const result = await requestSharedAgent(sessionCode);
+    const result = await requestSharedAgent(sessionCode, selectedKey);
     onResponse(result);
   };
 
@@ -251,19 +296,19 @@ function SharedAgentButton({
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        gap: 8,
+        gap: 10,
         // Soft separator from the primary Begin button — same hairline
         // colour as the other intro dividers so the secondary CTA reads
         // as "alternative path" rather than a competing primary action.
         paddingTop: 14,
         marginTop: 4,
         borderTop: '1px solid #1a1a1c',
-        width: 'min(420px, 100%)',
+        width: 'min(460px, 100%)',
       }}
     >
-      {/* Helper sits ABOVE the button — it's a question the helper text
-          asks ("don't have your own agent?"), the button is the answer.
-          Reading order: question first, action second. */}
+      {/* Helper sits ABOVE the picker — it's a question the helper text
+          asks ("don't have your own agent?"), the picker + button below
+          are the answer. Reading order: question first, action second. */}
       <span
         style={{
           fontSize: 10,
@@ -277,6 +322,46 @@ function SharedAgentButton({
       >
         DON'T HAVE YOUR OWN AGENT? WE'LL LAUNCH ONE FOR YOU
       </span>
+
+      {/* Pill row — four voice presets. Flex wrap so on narrow mobile
+          viewports the row breaks into two lines of two pills rather
+          than overflowing the container. */}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'center',
+          gap: 6,
+        }}
+      >
+        {PERSONALITY_OPTIONS.map((opt) => (
+          <PersonalityPill
+            key={opt.key}
+            option={opt}
+            selected={opt.key === selectedKey}
+            onSelect={() => setSelectedKey(opt.key)}
+          />
+        ))}
+      </div>
+
+      {/* Blurb for the currently-selected voice. Min-height stabilises
+          layout so swapping between short and long blurbs doesn't reflow
+          the button position. */}
+      <span
+        style={{
+          fontSize: 11,
+          color: '#a09d99',
+          letterSpacing: '0.04em',
+          fontStyle: 'italic',
+          textAlign: 'center',
+          lineHeight: 1.55,
+          maxWidth: 380,
+          minHeight: 34,
+        }}
+      >
+        {selected.blurb}
+      </span>
+
       <button
         onClick={onClick}
         onMouseEnter={() => setHover(true)}
@@ -310,6 +395,60 @@ function SharedAgentButton({
         </span>
       )}
     </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Single voice pill. Visually subtle so the row reads as a control group
+// rather than four competing buttons — active pill picks up the orange
+// brand accent we use elsewhere (Step headers, SharedAgentPanel border),
+// inactive ones stay in the muted-grey palette. Hover bumps the border
+// only, never the background, so the pills don't compete with the
+// primary "Play without your own agent" button below.
+// -----------------------------------------------------------------------------
+function PersonalityPill({
+  option,
+  selected,
+  onSelect,
+}: {
+  option: PersonalityOption;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const borderColor = selected
+    ? '#c9885b'
+    : hover
+    ? '#5a5a5e'
+    : '#3a3a3e';
+  const textColor = selected
+    ? '#d8d4cf'
+    : hover
+    ? '#d8d4cf'
+    : '#a09d99';
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      aria-pressed={selected}
+      style={{
+        padding: '5px 12px',
+        fontSize: 10,
+        letterSpacing: '0.22em',
+        background: 'transparent',
+        color: textColor,
+        border: `1px solid ${borderColor}`,
+        borderRadius: 999,
+        cursor: selected ? 'default' : 'pointer',
+        textTransform: 'uppercase',
+        fontFamily: 'inherit',
+        transition: 'color 160ms, border 160ms',
+      }}
+    >
+      {option.label}
+    </button>
   );
 }
 

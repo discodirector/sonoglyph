@@ -32,6 +32,7 @@ import { chainConfigStatus, mintSonoglyph, getSupplyInfo } from './chain.js';
 import { isAddress } from 'viem';
 import type { ClientMessage, ServerMessage } from './protocol.js';
 import { AgentPool } from './agents/pool.js';
+import { isValidPersonalityKey, type PersonalityKey } from './agents/spawn.js';
 
 const PORT = Number(process.env.PROXY_PORT ?? 8787);
 const PUBLIC_BASE_URL =
@@ -123,13 +124,29 @@ app.post('/agents/spawn', async (c) => {
   if (!game) {
     return c.json({ error: `unknown session: ${code}` }, 404);
   }
+  // Optional voice/character preset. Closed list defined in
+  // proxy/src/agents/spawn.ts:PERSONALITY_PROMPTS; we reject unknown keys
+  // with 400 (rather than silently dropping them) so a stale frontend
+  // bundle that ships a renamed key surfaces the error immediately
+  // instead of mysteriously producing a default-voiced agent.
+  const personalityRaw = c.req.query('personality');
+  let personalityKey: PersonalityKey | undefined;
+  if (personalityRaw !== undefined && personalityRaw !== '') {
+    if (!isValidPersonalityKey(personalityRaw)) {
+      return c.json(
+        { error: `unknown personality: ${personalityRaw}` },
+        400,
+      );
+    }
+    personalityKey = personalityRaw;
+  }
   // Caddy forwards the real client IP via X-Forwarded-For; fall back to
   // X-Real-IP, then to a sentinel that lumps everything into the same
   // rate-limit bucket (still useful as a coarse global brake).
   const xff = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
   const ip = xff || c.req.header('x-real-ip') || 'unknown';
 
-  const result = await agentPool.request(code, ip);
+  const result = await agentPool.request(code, ip, personalityKey);
   let httpStatus: 200 | 429 | 503 = 200;
   if (result.status === 'failed') {
     httpStatus = result.error?.startsWith('Too many') ? 429 : 503;

@@ -205,9 +205,15 @@ export interface SharedAgentRequestResult {
 
 export async function requestSharedAgent(
   sessionCode: string,
+  personalityKey?: string,
 ): Promise<SharedAgentRequestResult> {
+  // Build the query carefully — `personalityKey` is optional and we want
+  // to omit it entirely (rather than send `&personality=`) when unset, so
+  // the bridge sees an unset query param and uses the default voice.
+  const query = new URLSearchParams({ code: sessionCode });
+  if (personalityKey) query.set('personality', personalityKey);
   const res = await fetch(
-    `/agents/spawn?code=${encodeURIComponent(sessionCode)}`,
+    `/agents/spawn?${query.toString()}`,
     { method: 'POST' },
   );
   // 200 / 429 / 503 all return a JSON body with `status` + optional

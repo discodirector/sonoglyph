@@ -27,7 +27,12 @@
  * file should be testable in isolation.
  */
 
-import { loadSpawnConfig, spawnHermesAgent, type SpawnedAgent } from './spawn.js';
+import {
+  loadSpawnConfig,
+  spawnHermesAgent,
+  type PersonalityKey,
+  type SpawnedAgent,
+} from './spawn.js';
 
 export type AgentStatus = 'queued' | 'spawning' | 'active' | 'expired' | 'failed';
 
@@ -93,6 +98,11 @@ interface ActiveAgent {
 interface QueuedEntry {
   sessionCode: string;
   enqueuedAt: number;
+  /** Voice/character the player picked on the intro screen, if any. The
+   *  pool persists it on the queue entry so when the slot frees up and we
+   *  pull this session out, it's spawned with the originally-chosen voice
+   *  rather than silently downgraded to "default". */
+  personalityKey?: PersonalityKey;
 }
 
 export class AgentPool {
@@ -123,6 +133,7 @@ export class AgentPool {
   async request(
     sessionCode: string,
     ip: string,
+    personalityKey?: PersonalityKey,
   ): Promise<PoolStatus> {
     this.rolloverDaily();
 
@@ -159,7 +170,7 @@ export class AgentPool {
     // Slot available — spawn immediately.
     if (this.active.size < this.config.maxConcurrent) {
       try {
-        await this.spawnFor(sessionCode);
+        await this.spawnFor(sessionCode, personalityKey);
         const a = this.active.get(sessionCode);
         return { status: 'spawning', expiresAt: a?.expiresAt };
       } catch (err) {
@@ -168,8 +179,9 @@ export class AgentPool {
       }
     }
 
-    // No slot — enqueue.
-    this.queue.push({ sessionCode, enqueuedAt: Date.now() });
+    // No slot — enqueue (carrying the personality key so the deferred spawn
+    // uses the same voice the player picked).
+    this.queue.push({ sessionCode, enqueuedAt: Date.now(), personalityKey });
     const position = this.queue.length;
     // Push status to WS as well so the frontend's queue overlay updates
     // even if its HTTP response races with the listener callback.
@@ -235,10 +247,13 @@ export class AgentPool {
 
   // ---- internals ----------------------------------------------------------
 
-  private async spawnFor(sessionCode: string): Promise<void> {
+  private async spawnFor(
+    sessionCode: string,
+    personalityKey?: PersonalityKey,
+  ): Promise<void> {
     this.dailyCount += 1;
     const spawnConfig = loadSpawnConfig();
-    const agent = await spawnHermesAgent(sessionCode, spawnConfig);
+    const agent = await spawnHermesAgent(sessionCode, spawnConfig, personalityKey);
     const expiresAt = Date.now() + this.config.sessionTimeoutMs;
 
     // Hard timeout: if the descent runs long, kill the agent so it doesn't
@@ -287,10 +302,10 @@ export class AgentPool {
       });
     }
 
-    // Pull next from queue.
+    // Pull next from queue — preserving the originally-chosen voice.
     if (this.queue.length > 0 && this.active.size < this.config.maxConcurrent) {
       const next = this.queue.shift()!;
-      this.spawnFor(next.sessionCode).catch((err) => {
+      this.spawnFor(next.sessionCode, next.personalityKey).catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[pool ${next.sessionCode}] failed to spawn from queue:`, message);
         this.listener(next.sessionCode, {
