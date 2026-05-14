@@ -16,12 +16,19 @@ Restart=on-failure
 RestartSec=2
 StandardOutput=journal
 StandardError=journal
-# Hardening — bridge doesn't need any of this.
+# Hardening — bridge doesn't need filesystem write outside /srv/sonoglyph
+# and /tmp (via PrivateTmp). ProtectHome is `read-only` (not `true`) so the
+# bridge can read /root/.hermes/.env + config.yaml when spawning ephemeral
+# shared-agent Hermes processes, AND exec the operator's uv-managed Python
+# interpreter at /root/.local/share/uv/python/<…>/bin/python3.11 (which is
+# what /usr/local/bin/hermes's shebang chain resolves to). With
+# ProtectHome=true, both paths returned ENOENT to the service and shared-
+# agent spawn failed with exit code 127.
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ReadWritePaths=/srv/sonoglyph
-ProtectHome=true
+ProtectHome=read-only
 
 [Install]
 WantedBy=multi-user.target
