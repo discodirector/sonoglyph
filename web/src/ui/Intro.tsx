@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useSession } from '../state/useSession';
 import { HERMES_FIX_PROMPT } from './hermesFixPrompt';
+import { requestSharedAgent } from '../net/client';
 
 /**
  * Intro / pairing screen.
@@ -16,6 +17,22 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
   const pairing = useSession((s) => s.pairing);
   const agentConnected = useSession((s) => s.agentConnected);
   const proxyOk = useSession((s) => s.proxyOk);
+  const sharedAgent = useSession((s) => s.sharedAgent);
+  const setSharedAgentRequesting = useSession(
+    (s) => s.setSharedAgentRequesting,
+  );
+  const applySharedAgentResponse = useSession(
+    (s) => s.applySharedAgentResponse,
+  );
+
+  // "Shared agent" is engaged the moment the player has clicked the spawn
+  // button (or the server has put them in a queue / actively running
+  // process). We hide the BYO pairing instructions in those states because
+  // they don't apply — the bridge is doing the work for them. `idle` and
+  // `failed` keep the BYO panel visible (failed shows a retryable error
+  // banner above the spawn button).
+  const sharedAgentEngaged =
+    sharedAgent.status !== 'idle' && sharedAgent.status !== 'failed';
 
   // Two-layer container so the intro can grow taller than the viewport
   // (e.g. the troubleshooter is expanded with the long Hermes-patch
@@ -104,6 +121,10 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
         <p style={{ color: '#6a6660', fontSize: 12, letterSpacing: '0.2em' }}>
           {proxyOk === false ? 'BRIDGE OFFLINE' : 'OPENING BRIDGE…'}
         </p>
+      ) : sharedAgentEngaged ? (
+        // Player picked the shared-agent path. Pairing-panel real estate
+        // becomes a status readout — they have nothing to set up.
+        <SharedAgentPanel status={sharedAgent.status} />
       ) : (
         <PairingPanel
           command={pairing.hermesCommand}
@@ -121,7 +142,11 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
             color: agentConnected ? '#7be0d4' : '#6a6660',
           }}
         >
-          {agentConnected ? 'AGENT PAIRED' : 'WAITING FOR YOUR HERMES…'}
+          {agentConnected
+            ? 'AGENT PAIRED'
+            : sharedAgentEngaged
+            ? 'BRIDGE IS SPAWNING YOUR AGENT…'
+            : 'WAITING FOR YOUR HERMES…'}
         </span>
       </div>
 
@@ -143,7 +168,207 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
       >
         Begin descent
       </button>
+
+      {/* Spawn-shared-agent control — secondary CTA below the primary
+          Begin button. Visible only while pairing hasn't happened AND
+          the player hasn't already engaged the shared path. Once the
+          player clicks it, the spinner replaces this affordance and
+          (on `queued`) the SharedAgentOverlay covers the screen until a
+          slot frees. */}
+      {pairing && !agentConnected && !sharedAgentEngaged && (
+        <SharedAgentButton
+          sessionCode={pairing.code}
+          onRequesting={setSharedAgentRequesting}
+          onResponse={applySharedAgentResponse}
+          lastError={
+            sharedAgent.status === 'failed' ? sharedAgent.error : null
+          }
+        />
+      )}
       </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// "Play without your own agent" CTA — bridge spawns a Hermes process on the
+// VPS, paired to this session for up to 10 minutes. The button replaces
+// itself with a small spinner row while the HTTP request is in flight.
+//
+// Failure stays inline (small red caption below the button) rather than
+// going to a modal, so the player can retry with one click.
+// -----------------------------------------------------------------------------
+function SharedAgentButton({
+  sessionCode,
+  onRequesting,
+  onResponse,
+  lastError,
+}: {
+  sessionCode: string;
+  onRequesting: () => void;
+  onResponse: (r: {
+    status:
+      | 'idle'
+      | 'requesting'
+      | 'queued'
+      | 'spawning'
+      | 'active'
+      | 'expired'
+      | 'failed';
+    position?: number;
+    expiresAt?: number;
+    error?: string;
+  }) => void;
+  lastError: string | null;
+}) {
+  const [hover, setHover] = useState(false);
+
+  const onClick = async () => {
+    onRequesting();
+    const result = await requestSharedAgent(sessionCode);
+    onResponse(result);
+  };
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 8,
+        marginTop: 4,
+        // Soft separator from the primary Begin button — same dotted-ish
+        // hairline color as the other intro dividers so it doesn't pull
+        // focus from the main flow.
+        paddingTop: 14,
+        borderTop: '1px solid #1a1a1c',
+        width: 'min(420px, 100%)',
+      }}
+    >
+      <button
+        onClick={onClick}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        style={{
+          padding: '10px 22px',
+          fontSize: 11,
+          letterSpacing: '0.28em',
+          background: 'transparent',
+          color: hover ? '#d8d4cf' : '#a09d99',
+          border: `1px solid ${hover ? '#c9885b' : '#3a3a3e'}`,
+          cursor: 'pointer',
+          textTransform: 'uppercase',
+          transition: 'color 160ms, border 160ms',
+        }}
+      >
+        Play without your own agent
+      </button>
+      <span
+        style={{
+          fontSize: 11,
+          color: '#6a6660',
+          fontStyle: 'italic',
+          letterSpacing: '0.02em',
+          textAlign: 'center',
+          lineHeight: 1.5,
+          maxWidth: 360,
+        }}
+      >
+        don't have your own agent? we'll launch one for you for 10 minutes
+      </span>
+      {lastError && (
+        <span
+          style={{
+            fontSize: 10,
+            color: '#c95b5b',
+            letterSpacing: '0.05em',
+            marginTop: 4,
+            textAlign: 'center',
+            maxWidth: 360,
+          }}
+        >
+          {lastError}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Replacement for the PairingPanel once the player has engaged the shared-
+// agent path. Compact card explaining what's happening so they don't feel
+// stranded between click and pairing.
+// -----------------------------------------------------------------------------
+function SharedAgentPanel({
+  status,
+}: {
+  status:
+    | 'idle'
+    | 'requesting'
+    | 'queued'
+    | 'spawning'
+    | 'active'
+    | 'expired'
+    | 'failed';
+}) {
+  const headline =
+    status === 'requesting'
+      ? 'CONTACTING THE BRIDGE…'
+      : status === 'queued'
+      ? 'WAITING FOR A FREE SLOT…'
+      : status === 'spawning'
+      ? 'SPAWNING YOUR AGENT…'
+      : status === 'active'
+      ? 'YOUR AGENT IS READY'
+      : status === 'expired'
+      ? 'YOUR AGENT EXPIRED'
+      : 'UNAVAILABLE';
+
+  const body =
+    status === 'expired'
+      ? 'Your shared agent ran past its 10-minute window. Refresh the page to start a fresh descent.'
+      : status === 'queued'
+      ? 'A queue overlay will appear shortly with your position.'
+      : status === 'active'
+      ? 'The bridge has handed off to your agent. Hit BEGIN to start the descent.'
+      : 'Hold on a beat — this usually takes about five seconds. ' +
+        'The pairing light will turn green when your agent connects.';
+
+  return (
+    <div
+      style={{
+        maxWidth: 560,
+        width: '100%',
+        padding: '20px 24px',
+        border: '1px solid #2a2a2e',
+        borderLeft: '2px solid #c9885b',
+        borderRadius: 3,
+        background: 'rgba(255,255,255,0.02)',
+        textAlign: 'left',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          letterSpacing: '0.32em',
+          color: '#c9885b',
+          textTransform: 'uppercase',
+          marginBottom: 10,
+        }}
+      >
+        {headline}
+      </div>
+      <p
+        style={{
+          margin: 0,
+          fontSize: 13,
+          lineHeight: 1.7,
+          color: '#a09d99',
+          letterSpacing: '0.02em',
+        }}
+      >
+        {body}
+      </p>
     </div>
   );
 }

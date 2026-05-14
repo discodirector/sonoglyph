@@ -107,4 +107,20 @@ export type ServerMessage =
       reason: 'max_layers';
       artifact: FinalArtifact | null;
     }
+  /**
+   * Sent by the bridge for "shared agent" sessions where the user asked
+   * us to spawn an ephemeral Hermes on the VPS. See proxy/src/protocol.ts
+   * for full lifecycle docs. Drives the queue overlay + inline status
+   * indicator next to the "Play without your own agent" button.
+   */
+  | {
+      type: 'shared_agent_status';
+      status: 'queued' | 'spawning' | 'active' | 'expired' | 'failed';
+      /** 1-based queue position; only set when status='queued'. */
+      position?: number;
+      /** Unix ms when the spawned process will be killed. */
+      expiresAt?: number;
+      /** Human-readable explanation; set when status='failed'/'expired'. */
+      error?: string;
+    }
   | { type: 'error'; message: string };

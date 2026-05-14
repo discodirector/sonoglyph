@@ -172,4 +172,30 @@ export type ServerMessage =
       reason: 'max_layers';
       artifact: FinalArtifact | null;
     }
+  /**
+   * Pushed by the bridge for "shared agent" sessions (player asked us to
+   * spawn an ephemeral Hermes on the VPS instead of bringing their own).
+   *
+   * Lifecycle: `queued` (slots full — `position` is 1-based FIFO index) →
+   * `spawning` (process forked, MCP handshake pending — `expiresAt` is
+   * the hard kill deadline) → `active` (handshake succeeded, agent_paired
+   * also fires; UI can transition to playable state) → either no further
+   * event (natural exit on `finished:true`, game already broadcast its
+   * own `finished` event) OR `expired` (10-min timeout / non-zero exit /
+   * external kill) OR `failed` (spawn never completed: rate limit hit,
+   * daily cap reached, binary missing, etc).
+   *
+   * The frontend uses this to drive the queue overlay and the inline
+   * status indicator next to the "Play without your own agent" button.
+   */
+  | {
+      type: 'shared_agent_status';
+      status: 'queued' | 'spawning' | 'active' | 'expired' | 'failed';
+      /** 1-based queue position; only set when status='queued'. */
+      position?: number;
+      /** Unix ms when the process will be killed; set when status='spawning'/'active'. */
+      expiresAt?: number;
+      /** Human-readable explanation; set when status='failed'/'expired'. */
+      error?: string;
+    }
   | { type: 'error'; message: string };

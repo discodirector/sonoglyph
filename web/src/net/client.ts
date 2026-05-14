@@ -176,3 +176,55 @@ export async function fetchSupply(): Promise<SupplyInfo> {
   }
   return (await res.json()) as SupplyInfo;
 }
+
+// ---------------------------------------------------------------------------
+// Shared-agent spawn — for players who don't have their own Hermes install.
+// Posts to the bridge, which forks an ephemeral hermes-CLI on the VPS,
+// paired to the same `?code=` as this WS session. Subsequent state
+// transitions (queued → spawning → active → expired) flow back as
+// `shared_agent_status` messages over the existing WS, so this fetch
+// returns only the immediate decision and any failure reason.
+//
+// HTTP semantics:
+//   200 — request accepted (`status` is 'spawning' or 'queued', or 'active'
+//         on idempotent retry)
+//   429 — rate limit (status='failed', error explains)
+//   503 — capacity exceeded / spawn machinery error
+//   404 — unknown session code (e.g. WS reconnected with a new one)
+// ---------------------------------------------------------------------------
+
+export interface SharedAgentRequestResult {
+  status: 'queued' | 'spawning' | 'active' | 'expired' | 'failed';
+  /** 1-based queue position; only set when status='queued'. */
+  position?: number;
+  /** Unix ms when the spawned process will be killed. */
+  expiresAt?: number;
+  /** Human-readable explanation; set on 'failed'. */
+  error?: string;
+}
+
+export async function requestSharedAgent(
+  sessionCode: string,
+): Promise<SharedAgentRequestResult> {
+  const res = await fetch(
+    `/agents/spawn?code=${encodeURIComponent(sessionCode)}`,
+    { method: 'POST' },
+  );
+  // 200 / 429 / 503 all return a JSON body with `status` + optional
+  // `error`. 404 (unknown session) is the only path that doesn't fit the
+  // pool's shape — surface it as a synthetic failure.
+  if (res.status === 404) {
+    return {
+      status: 'failed',
+      error: 'session not recognised by the bridge — refresh the page',
+    };
+  }
+  try {
+    return (await res.json()) as SharedAgentRequestResult;
+  } catch {
+    return {
+      status: 'failed',
+      error: `bridge returned ${res.status} ${res.statusText}`,
+    };
+  }
+}

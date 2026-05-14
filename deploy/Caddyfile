@@ -8,6 +8,8 @@
 #   /pin*   → bridge :8787  (IPFS pinning POST endpoints)
 #   /mint   → bridge :8787  (sign + broadcast Sonoglyph.mintDescent)
 #   /supply → bridge :8787  (cached lastTokenId / MAX_SUPPLY for Finale UI)
+#   /agents → bridge :8787  (POST /agents/spawn — spawn ephemeral Hermes
+#                            for players without their own)
 #   /health → bridge :8787
 #   else    → static frontend
 #
@@ -56,6 +58,11 @@ sonoglyph.xyz, www.sonoglyph.xyz {
 	}
 
 	handle /supply {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	@agents path /agents /agents/*
+	handle @agents {
 		reverse_proxy 127.0.0.1:8787
 	}
 

@@ -94,6 +94,34 @@ export interface PairingInfo {
   hermesPrompt: string;
 }
 
+/**
+ * Live status of the shared-agent request flow (the "play without your
+ * own Hermes" path). `idle` = user hasn't asked for one yet; everything
+ * else mirrors the bridge pool's PoolStatus.
+ *
+ * `requesting` is purely client-side — set while the POST /agents/spawn
+ * is in flight before the bridge has decided spawning vs queued. The
+ * other states arrive via WS `shared_agent_status` pushes.
+ */
+export type SharedAgentStatus =
+  | 'idle'
+  | 'requesting'
+  | 'queued'
+  | 'spawning'
+  | 'active'
+  | 'expired'
+  | 'failed';
+
+export interface SharedAgentState {
+  status: SharedAgentStatus;
+  /** 1-based queue position; non-null only when status='queued'. */
+  position: number | null;
+  /** Unix ms when the spawned hermes will be SIGTERM'd. */
+  expiresAt: number | null;
+  /** Last error string; surfaced under the spawn button. */
+  error: string | null;
+}
+
 interface SessionState {
   // --- mirrored from server ---
   phase: Phase;
@@ -152,6 +180,13 @@ interface SessionState {
    *  Populated by the Finale's mount-effect call to `/supply`. */
   supplyMinted: number | null;
   supplyMax: number | null;
+  /**
+   * Shared-agent status — UI uses this to drive the "Play without your
+   * own agent" button, the queue overlay, and the 10-minute timer chip.
+   * Stays 'idle' for players who bring their own Hermes (bypassing the
+   * spawn endpoint entirely).
+   */
+  sharedAgent: SharedAgentState;
   startedAt: number | null;
   log: SessionEvent[];
 
@@ -197,6 +232,25 @@ interface SessionState {
    *  waiting for the bridge's 15 s cache window to expire. No-op if
    *  supplyMinted is null (we don't optimistically guess). */
   bumpSupplyMinted: () => void;
+  /** Local: flip to 'requesting' before POST /agents/spawn fires, so the
+   *  spawn button can show a spinner without waiting for the HTTP round-trip. */
+  setSharedAgentRequesting: () => void;
+  /** Local: apply the HTTP response from /agents/spawn — typically lands
+   *  in 'spawning' or 'queued' but covers 'failed' / idempotent 'active'. */
+  applySharedAgentResponse: (r: {
+    status: SharedAgentStatus;
+    position?: number;
+    expiresAt?: number;
+    error?: string;
+  }) => void;
+  /** Server-driven: WS `shared_agent_status` push. Same shape as the HTTP
+   *  response so the applier is a thin wrapper. */
+  applySharedAgentStatus: (r: {
+    status: SharedAgentStatus;
+    position?: number;
+    expiresAt?: number;
+    error?: string;
+  }) => void;
   pushEvent: (e: PendingEvent) => void;
 }
 
@@ -236,6 +290,12 @@ export const useSession = create<SessionState>((set) => ({
   mintError: null,
   supplyMinted: null,
   supplyMax: null,
+  sharedAgent: {
+    status: 'idle',
+    position: null,
+    expiresAt: null,
+    error: null,
+  },
   startedAt: null,
   log: [],
 
@@ -335,11 +395,44 @@ export const useSession = create<SessionState>((set) => ({
     set((s) =>
       s.supplyMinted == null ? {} : { supplyMinted: s.supplyMinted + 1 },
     ),
+  setSharedAgentRequesting: () =>
+    set(() => ({
+      sharedAgent: {
+        status: 'requesting',
+        position: null,
+        expiresAt: null,
+        error: null,
+      },
+    })),
+  applySharedAgentResponse: (r) => set(() => ({ sharedAgent: foldShared(r) })),
+  applySharedAgentStatus: (r) => set(() => ({ sharedAgent: foldShared(r) })),
   pushEvent: (e) =>
     set((s) => ({
       log: [...s.log, { ...e, t: relTime(s.startedAt) } as SessionEvent],
     })),
 }));
+
+/**
+ * Reducer for both the HTTP response and the WS push — same payload shape,
+ * same target field, no reason to fork the logic. Reset the queue position
+ * unless the new status is 'queued', and clear the error unless the new
+ * status is 'failed'/'expired'.
+ */
+function foldShared(r: {
+  status: SharedAgentStatus;
+  position?: number;
+  expiresAt?: number;
+  error?: string;
+}): SharedAgentState {
+  return {
+    status: r.status,
+    position: r.status === 'queued' ? r.position ?? null : null,
+    expiresAt: r.expiresAt ?? null,
+    error: r.status === 'failed' || r.status === 'expired'
+      ? r.error ?? null
+      : null,
+  };
+}
 
 function relTime(startedAt: number | null): number {
   return startedAt ? (Date.now() - startedAt) / 1000 : 0;

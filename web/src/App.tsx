@@ -6,6 +6,7 @@ import { Pads } from './ui/Pads';
 import { Intro } from './ui/Intro';
 import { Onboarding } from './ui/Onboarding';
 import { Finale } from './ui/Finale';
+import { SharedAgentOverlay } from './ui/SharedAgentOverlay';
 import { LAYER_TYPES, useSession } from './state/useSession';
 import {
   addLayer,
@@ -52,6 +53,7 @@ export function App() {
   const applyLayerAdded = useSession((s) => s.applyLayerAdded);
   const applyTurnChanged = useSession((s) => s.applyTurnChanged);
   const applyFinished = useSession((s) => s.applyFinished);
+  const applySharedAgentStatus = useSession((s) => s.applySharedAgentStatus);
 
   const bridgeRef = useRef<BridgeConnection | null>(null);
   const layerHandlesRef = useRef<Map<string, () => void>>(new Map());
@@ -252,6 +254,14 @@ export function App() {
         case 'finished':
           applyFinished(msg.artifact);
           return;
+        case 'shared_agent_status':
+          applySharedAgentStatus({
+            status: msg.status,
+            position: msg.position,
+            expiresAt: msg.expiresAt,
+            error: msg.error,
+          });
+          return;
         case 'error':
           console.warn('[bridge]', msg.message);
           return;
@@ -322,6 +332,10 @@ export function App() {
       {phase === 'playing' && <Mixer />}
       {phase === 'playing' && <Pads />}
       {phase === 'finished' && <Finale />}
+      {/* Queue overlay self-gates on shared-agent status; rendered at the
+          root so it sits above Intro/Onboarding regardless of where the
+          player is in the flow when their session gets queued. */}
+      <SharedAgentOverlay />
     </>
   );
 }

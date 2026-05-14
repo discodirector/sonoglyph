@@ -31,6 +31,7 @@ import { pinFileToPinata } from './storage.js';
 import { chainConfigStatus, mintSonoglyph, getSupplyInfo } from './chain.js';
 import { isAddress } from 'viem';
 import type { ClientMessage, ServerMessage } from './protocol.js';
+import { AgentPool } from './agents/pool.js';
 
 const PORT = Number(process.env.PROXY_PORT ?? 8787);
 const PUBLIC_BASE_URL =
@@ -46,6 +47,28 @@ const app = new Hono();
 app.use('*', cors({ origin: CORS_ORIGINS, credentials: true }));
 
 const registry = new GameRegistry();
+
+// -----------------------------------------------------------------------------
+// AgentPool — manages the ephemeral Hermes processes we spawn on behalf of
+// players who don't have their own Hermes install. The listener forwards
+// pool status events to the matching GameSession's WS subscribers so the
+// browser UI can show queue position / "spawning..." / etc.
+//
+// We construct the pool eagerly so the daily counter starts ticking from
+// boot, even before the first /agents/spawn hit.
+// -----------------------------------------------------------------------------
+const agentPool = new AgentPool((sessionCode, status) => {
+  const game = registry.get(sessionCode);
+  if (game) {
+    game.notifySharedAgentStatus(status);
+  } else {
+    // Session disappeared mid-flight (WS closed before spawn completed).
+    // Make sure we don't keep a zombie agent burning a slot.
+    console.warn(
+      `[pool] orphan status for ${sessionCode} (${status.status}) — session gone`,
+    );
+  }
+});
 
 // -----------------------------------------------------------------------------
 app.get('/health', (c) => {
@@ -67,8 +90,51 @@ app.get('/health', (c) => {
       chainId: chain.chainId,
       rpcUrl: chain.rpcUrl,
     },
+    sharedAgents: agentPool.status(),
     time: Date.now(),
   });
+});
+
+// -----------------------------------------------------------------------------
+// Shared-agent spawn endpoint — frontend hits this when the user clicks
+// "Play without your own agent". The bridge spawns an ephemeral Hermes
+// subprocess, paired to the same session code as the browser.
+//
+// Response shape echoes pool.request()'s PoolStatus:
+//   { status: 'spawning' | 'queued' | 'failed' (or 'active' on retry),
+//     position?: number,        // for queued
+//     expiresAt?: number,       // for spawning/active
+//     error?: string }          // for failed
+//
+// HTTP status:
+//   200 — request accepted (status spawning/queued/active)
+//   429 — rate limited (response body has status='failed' + reason)
+//   503 — capacity exceeded / spawn machinery broken (failed + reason)
+//
+// Idempotency: hitting /agents/spawn twice for the same code is a no-op —
+// the pool returns the current status of the existing entry.
+// -----------------------------------------------------------------------------
+app.post('/agents/spawn', async (c) => {
+  const code = c.req.query('code');
+  if (!code) {
+    return c.json({ error: 'missing ?code= query parameter' }, 400);
+  }
+  const game = registry.get(code);
+  if (!game) {
+    return c.json({ error: `unknown session: ${code}` }, 404);
+  }
+  // Caddy forwards the real client IP via X-Forwarded-For; fall back to
+  // X-Real-IP, then to a sentinel that lumps everything into the same
+  // rate-limit bucket (still useful as a coarse global brake).
+  const xff = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
+  const ip = xff || c.req.header('x-real-ip') || 'unknown';
+
+  const result = await agentPool.request(code, ip);
+  let httpStatus: 200 | 429 | 503 = 200;
+  if (result.status === 'failed') {
+    httpStatus = result.error?.startsWith('Too many') ? 429 : 503;
+  }
+  return c.json(result, httpStatus);
 });
 
 // -----------------------------------------------------------------------------
@@ -345,6 +411,13 @@ wss.on('connection', (ws: WSConn) => {
     if (msg.type === 'finished' && msg.artifact === null) {
       void finalizeWithKimi(game);
     }
+    // Promote shared-agent status from 'spawning' to 'active' once the
+    // spawned hermes has completed its MCP handshake (which is the signal
+    // that produces `agent_paired` upstream). No-op for BYO sessions —
+    // the pool tracks nothing for them.
+    if (msg.type === 'agent_paired') {
+      agentPool.markActive(code);
+    }
   });
 
   const mcpUrl = `${PUBLIC_BASE_URL.replace(/\/$/, '')}/mcp?code=${code}`;
@@ -419,6 +492,11 @@ wss.on('connection', (ws: WSConn) => {
   ws.on('close', () => {
     console.log(`[ws ${code}] client disconnected`);
     unsubscribe();
+    // Cancel any pending shared agent (queued or active) for this session
+    // immediately — keeping a dead-tab session in the queue would stall
+    // others, and an active spawned agent has no reason to keep playing
+    // (the player can't see it). The pool no-ops if there's no entry.
+    agentPool.cancel(code);
     // The session lives on briefly so a brief reconnect could reattach.
     // GC will reap it after idleMs if nobody comes back.
     // MCP entry is dropped only when the registry GCs the game.

@@ -293,6 +293,22 @@ export class GameSession {
     });
   }
 
+  /**
+   * Push a shared-agent pool status update to this session's WS subscribers.
+   *
+   * Only used when the player opted into the "we spawn a Hermes for you"
+   * path. The AgentPool calls this via a listener; we don't import the
+   * pool here to keep GameSession testable without the spawn machinery.
+   */
+  notifySharedAgentStatus(s: {
+    status: 'queued' | 'spawning' | 'active' | 'expired' | 'failed';
+    position?: number;
+    expiresAt?: number;
+    error?: string;
+  }): void {
+    this.broadcast({ type: 'shared_agent_status', ...s });
+  }
+
   /** Called by the bridge once Kimi finishes — embedded into `finished`. */
   setFinalArtifact(artifact: FinalArtifact): void {
     this.finalArtifact = artifact;
