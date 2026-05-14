@@ -117,6 +117,75 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
         you compose the cave.
       </p>
 
+      {/* Primary action block. Moved above the setup instructions so a
+          fresh visitor immediately sees both ways to start (their own
+          Hermes via Begin, or the bridge-spawned agent via Play Without)
+          without having to scroll past the pairing panel first. The
+          setup instructions sit below as supporting/reference material. */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 12,
+          width: '100%',
+          maxWidth: 520,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <StatusDot ok={agentConnected} />
+          <span
+            style={{
+              fontSize: 12,
+              letterSpacing: '0.2em',
+              color: agentConnected ? '#7be0d4' : '#6a6660',
+            }}
+          >
+            {agentConnected
+              ? 'AGENT PAIRED'
+              : sharedAgentEngaged
+              ? 'BRIDGE IS SPAWNING YOUR AGENT…'
+              : 'WAITING FOR YOUR HERMES…'}
+          </span>
+        </div>
+
+        <button
+          onClick={onBegin}
+          disabled={!agentConnected}
+          style={{
+            padding: '12px 28px',
+            letterSpacing: '0.3em',
+            fontSize: 13,
+            background: agentConnected ? '#d8d4cf' : 'transparent',
+            color: agentConnected ? '#050507' : '#3a3a3e',
+            border: `1px solid ${agentConnected ? '#d8d4cf' : '#3a3a3e'}`,
+            cursor: agentConnected ? 'pointer' : 'default',
+            textTransform: 'uppercase',
+            transition: 'background 200ms, color 200ms, border 200ms',
+          }}
+        >
+          Begin descent
+        </button>
+
+        {/* Secondary CTA — bridge-spawned ephemeral Hermes. Only shown
+            when (a) the bridge has minted a session code, (b) pairing
+            hasn't happened yet (no point offering it after AGENT PAIRED),
+            and (c) the player hasn't already engaged the shared path. */}
+        {pairing && !agentConnected && !sharedAgentEngaged && (
+          <SharedAgentButton
+            sessionCode={pairing.code}
+            onRequesting={setSharedAgentRequesting}
+            onResponse={applySharedAgentResponse}
+            lastError={
+              sharedAgent.status === 'failed' ? sharedAgent.error : null
+            }
+          />
+        )}
+      </div>
+
+      {/* Setup-instructions block — moved below the primary actions so it
+          reads as "here's HOW to make Begin work if you want your own
+          agent" rather than as the gateway to the page. */}
       {!pairing ? (
         <p style={{ color: '#6a6660', fontSize: 12, letterSpacing: '0.2em' }}>
           {proxyOk === false ? 'BRIDGE OFFLINE' : 'OPENING BRIDGE…'}
@@ -130,59 +199,6 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
           command={pairing.hermesCommand}
           prompt={pairing.hermesPrompt}
           code={pairing.code}
-        />
-      )}
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <StatusDot ok={agentConnected} />
-        <span
-          style={{
-            fontSize: 12,
-            letterSpacing: '0.2em',
-            color: agentConnected ? '#7be0d4' : '#6a6660',
-          }}
-        >
-          {agentConnected
-            ? 'AGENT PAIRED'
-            : sharedAgentEngaged
-            ? 'BRIDGE IS SPAWNING YOUR AGENT…'
-            : 'WAITING FOR YOUR HERMES…'}
-        </span>
-      </div>
-
-      <button
-        onClick={onBegin}
-        disabled={!agentConnected}
-        style={{
-          marginTop: 8,
-          padding: '12px 28px',
-          letterSpacing: '0.3em',
-          fontSize: 13,
-          background: agentConnected ? '#d8d4cf' : 'transparent',
-          color: agentConnected ? '#050507' : '#3a3a3e',
-          border: `1px solid ${agentConnected ? '#d8d4cf' : '#3a3a3e'}`,
-          cursor: agentConnected ? 'pointer' : 'default',
-          textTransform: 'uppercase',
-          transition: 'background 200ms, color 200ms, border 200ms',
-        }}
-      >
-        Begin descent
-      </button>
-
-      {/* Spawn-shared-agent control — secondary CTA below the primary
-          Begin button. Visible only while pairing hasn't happened AND
-          the player hasn't already engaged the shared path. Once the
-          player clicks it, the spinner replaces this affordance and
-          (on `queued`) the SharedAgentOverlay covers the screen until a
-          slot frees. */}
-      {pairing && !agentConnected && !sharedAgentEngaged && (
-        <SharedAgentButton
-          sessionCode={pairing.code}
-          onRequesting={setSharedAgentRequesting}
-          onResponse={applySharedAgentResponse}
-          lastError={
-            sharedAgent.status === 'failed' ? sharedAgent.error : null
-          }
         />
       )}
       </div>
@@ -236,15 +252,31 @@ function SharedAgentButton({
         flexDirection: 'column',
         alignItems: 'center',
         gap: 8,
-        marginTop: 4,
-        // Soft separator from the primary Begin button — same dotted-ish
-        // hairline color as the other intro dividers so it doesn't pull
-        // focus from the main flow.
+        // Soft separator from the primary Begin button — same hairline
+        // colour as the other intro dividers so the secondary CTA reads
+        // as "alternative path" rather than a competing primary action.
         paddingTop: 14,
+        marginTop: 4,
         borderTop: '1px solid #1a1a1c',
         width: 'min(420px, 100%)',
       }}
     >
+      {/* Helper sits ABOVE the button — it's a question the helper text
+          asks ("don't have your own agent?"), the button is the answer.
+          Reading order: question first, action second. */}
+      <span
+        style={{
+          fontSize: 10,
+          color: '#6a6660',
+          letterSpacing: '0.22em',
+          textTransform: 'uppercase',
+          textAlign: 'center',
+          lineHeight: 1.6,
+          maxWidth: 360,
+        }}
+      >
+        DON'T HAVE YOUR OWN AGENT? WE'LL LAUNCH ONE FOR YOU
+      </span>
       <button
         onClick={onClick}
         onMouseEnter={() => setHover(true)}
@@ -263,19 +295,6 @@ function SharedAgentButton({
       >
         Play without your own agent
       </button>
-      <span
-        style={{
-          fontSize: 11,
-          color: '#6a6660',
-          fontStyle: 'italic',
-          letterSpacing: '0.02em',
-          textAlign: 'center',
-          lineHeight: 1.5,
-          maxWidth: 360,
-        }}
-      >
-        don't have your own agent? we'll launch one for you for 10 minutes
-      </span>
       {lastError && (
         <span
           style={{
