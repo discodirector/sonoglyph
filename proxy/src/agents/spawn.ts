@@ -31,8 +31,12 @@
  * SOUL.md / AGENTS.md / .cursorrules into the system prompt. Spawned agents
  * are stateless personas — we want a clean slate for every session.
  *
- * Why `-Q`: programmatic mode, suppresses banner/spinner/tool previews so
- * journald logs stay readable.
+ * Note on `-Q` (programmatic mode): newer docs list it for top-level
+ * invocations but Hermes v0.13.0 on the deployed VPS rejected it as
+ * "unrecognized arguments". We dropped it — `-z` already promises
+ * "single prompt in, final response text out, nothing else on stdout or
+ * stderr" per the same docs, so the banner-suppression `-Q` gave us was
+ * redundant on supported versions and incompatible on older ones.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -187,7 +191,7 @@ export async function spawnHermesAgent(
   );
 
   // ---- 3. Spawn -------------------------------------------------------------
-  const args = ['--yolo', '--ignore-rules', '-Q', '-z', INITIAL_PROMPT];
+  const args = ['--yolo', '--ignore-rules', '-z', INITIAL_PROMPT];
   console.log(
     `[spawn ${sessionCode}] launching ${config.hermesBinPath} ` +
       `(HERMES_HOME=${tmpHome}, model=${config.modelOverride ?? 'inherited'})`,
