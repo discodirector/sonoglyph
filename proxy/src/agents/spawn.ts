@@ -107,21 +107,45 @@ export async function spawnHermesAgent(
   const tmpHome = join(SPAWN_BASE_DIR, sessionCode, '.hermes');
   await mkdir(tmpHome, { recursive: true });
 
-  // ---- 1. Copy operator's .env (API keys, base URLs) ------------------------
-  // Hermes resolves provider credentials from $HERMES_HOME/.env at startup.
-  // If the file is missing we just warn — Hermes also falls back to ambient
-  // process env, and the bridge inherits the operator's shell env via
-  // systemd EnvironmentFile, so keys can still be present.
-  try {
-    await copyFile(
-      join(config.hermesHomePath, '.env'),
-      join(tmpHome, '.env'),
-    );
-  } catch (err) {
-    console.warn(
-      `[spawn ${sessionCode}] could not copy global .env (${(err as Error).message}); ` +
-        `relying on process env for credentials`,
-    );
+  // ---- 1. Copy operator's credential files ---------------------------------
+  // Two distinct auth pathways live in HERMES_HOME, depending on the
+  // operator's provider setup:
+  //   - `.env`       — plain API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY,
+  //                    OPENROUTER_API_KEY, …). Used when the operator did
+  //                    `hermes config set OPENAI_API_KEY …`.
+  //   - `auth.json`  — OAuth tokens for subscription-based auth
+  //                    (ChatGPT/Codex sign-in). Used when the operator
+  //                    did `hermes auth` and signed in with their OpenAI
+  //                    account. This is what's hooked up on this VPS.
+  // Both are independent — Hermes consults whichever one matches the
+  // requested model/provider. Copy both, warn-on-missing for each, since
+  // a fresh install may have only one of them.
+  //
+  // We copy (not symlink) so refresh-token writes from inside Hermes land
+  // in the ephemeral /tmp dir and DON'T mutate the operator's master copy
+  // — ProtectHome=read-only on the bridge service would refuse a write
+  // through a symlink anyway. The 10-min spawn window is well below the
+  // OAuth refresh interval, so this should never actually fire.
+  for (const credFile of ['.env', 'auth.json']) {
+    try {
+      await copyFile(
+        join(config.hermesHomePath, credFile),
+        join(tmpHome, credFile),
+      );
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      // ENOENT is expected for whichever pathway the operator isn't using;
+      // log it at debug-ish level so it doesn't look like a real error.
+      if (code === 'ENOENT') {
+        console.log(
+          `[spawn ${sessionCode}] no ${credFile} in ${config.hermesHomePath} — skipping`,
+        );
+      } else {
+        console.warn(
+          `[spawn ${sessionCode}] could not copy ${credFile}: ${(err as Error).message}`,
+        );
+      }
+    }
   }
 
   // ---- 2. Read + patch config.yaml -----------------------------------------
