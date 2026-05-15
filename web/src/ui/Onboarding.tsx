@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 /**
  * Onboarding screen — sits between BEGIN (audio init + recording start)
@@ -20,9 +20,13 @@ import { useEffect } from 'react';
  * period) so it pulses calmly rather than strobing.
  */
 export function Onboarding({ onContinue }: { onContinue: () => void }) {
+  const [hoverContinue, setHoverContinue] = useState(false);
+
   // Enter (and Space, as a courtesy for trackpad-only laptops where the
   // Enter key is awkwardly tucked) advances. We listen on window so the
   // player doesn't have to focus anything first — they just hit the key.
+  // Mobile/touch players hit the explicit button at the bottom of the
+  // screen instead (there is no Enter key on a phone keyboard).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Enter' || e.key === ' ') {
@@ -158,26 +162,40 @@ export function Onboarding({ onContinue }: { onContinue: () => void }) {
         </div>
       </div>
 
-      {/* PRESS ENTER prompt — pinned to the bottom-center of the
+      {/* Continue affordance — pinned to the bottom-center of the
           viewport (not the inner column) so it stays put even when the
-          content is short. Uses the existing sg-hint-pulse keyframe
-          for a slow breathing fade. */}
-      <div
+          content is short. Rendered as a real <button> so touch devices
+          (no Enter key on a phone keyboard) can tap through; desktop
+          players still have the Enter/Space window listener above.
+          Uses the existing sg-hint-pulse keyframe for a slow breathing
+          fade. Min-height 44 keeps the iOS HIG touch-target floor. */}
+      <button
+        type="button"
+        onClick={onContinue}
+        onMouseEnter={() => setHoverContinue(true)}
+        onMouseLeave={() => setHoverContinue(false)}
         style={{
           position: 'fixed',
           left: '50%',
-          bottom: 36,
+          bottom: 28,
           transform: 'translateX(-50%)',
           fontSize: 12,
-          letterSpacing: '0.35em',
-          color: '#c9885b',
+          letterSpacing: '0.32em',
+          color: hoverContinue ? '#050507' : '#c9885b',
           textTransform: 'uppercase',
+          background: hoverContinue ? '#c9885b' : 'transparent',
+          border: '1px solid #c9885b',
+          borderRadius: 3,
+          padding: '12px 24px',
+          minHeight: 44,
+          fontFamily: 'inherit',
+          cursor: 'pointer',
           animation: 'sg-hint-pulse 2.4s ease-in-out infinite',
-          pointerEvents: 'none',
+          transition: 'background 160ms, color 160ms',
         }}
       >
-        ⏎  Press Enter to continue
-      </div>
+        Tap or press Enter to continue
+      </button>
     </div>
   );
 }
