@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSession } from '../state/useSession';
 import { HERMES_FIX_PROMPT } from './hermesFixPrompt';
 import { requestSharedAgent } from '../net/client';
@@ -33,6 +33,21 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
   // banner above the spawn button).
   const sharedAgentEngaged =
     sharedAgent.status !== 'idle' && sharedAgent.status !== 'failed';
+
+  // Top-level tab — which path the player is reading right now. Default is
+  // BYO ("I have Hermes") since this is a Hermes-hackathon submission and
+  // the primary audience already has a local agent. The shared tab is the
+  // explicit fallback for newcomers.
+  //
+  // Auto-flip rule: if a shared agent is already engaged (queued / spawning
+  // / active) we force the tab to 'shared' so a stray click on the BYO tab
+  // can't visually orphan the spawned process. Players who want to bail
+  // from a queued spawn use the page-level overlay or close the tab; the
+  // BYO tab stays disabled (greyed) while engagement is live.
+  const [topTab, setTopTab] = useState<'byo' | 'shared'>('byo');
+  useEffect(() => {
+    if (sharedAgentEngaged && topTab !== 'shared') setTopTab('shared');
+  }, [sharedAgentEngaged, topTab]);
 
   // Two-layer container so the intro can grow taller than the viewport
   // (e.g. the troubleshooter is expanded with the long Hermes-patch
@@ -117,92 +132,219 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
         you compose the cave.
       </p>
 
-      {/* Primary action block. Moved above the setup instructions so a
-          fresh visitor immediately sees both ways to start (their own
-          Hermes via Begin, or the bridge-spawned agent via Play Without)
-          without having to scroll past the pairing panel first. The
-          setup instructions sit below as supporting/reference material. */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 12,
-          width: '100%',
-          maxWidth: 520,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <StatusDot ok={agentConnected} />
-          <span
-            style={{
-              fontSize: 12,
-              letterSpacing: '0.2em',
-              color: agentConnected ? '#7be0d4' : '#6a6660',
-            }}
-          >
-            {agentConnected
-              ? 'AGENT PAIRED'
-              : sharedAgentEngaged
-              ? 'BRIDGE IS SPAWNING YOUR AGENT…'
-              : 'WAITING FOR YOUR HERMES…'}
-          </span>
-        </div>
-
-        <button
-          onClick={onBegin}
-          disabled={!agentConnected}
-          style={{
-            padding: '12px 28px',
-            letterSpacing: '0.3em',
-            fontSize: 13,
-            background: agentConnected ? '#d8d4cf' : 'transparent',
-            color: agentConnected ? '#050507' : '#3a3a3e',
-            border: `1px solid ${agentConnected ? '#d8d4cf' : '#3a3a3e'}`,
-            cursor: agentConnected ? 'pointer' : 'default',
-            textTransform: 'uppercase',
-            transition: 'background 200ms, color 200ms, border 200ms',
-          }}
-        >
-          Begin descent
-        </button>
-
-        {/* Secondary CTA — bridge-spawned ephemeral Hermes. Only shown
-            when (a) the bridge has minted a session code, (b) pairing
-            hasn't happened yet (no point offering it after AGENT PAIRED),
-            and (c) the player hasn't already engaged the shared path. */}
-        {pairing && !agentConnected && !sharedAgentEngaged && (
-          <SharedAgentButton
-            sessionCode={pairing.code}
-            onRequesting={setSharedAgentRequesting}
-            onResponse={applySharedAgentResponse}
-            lastError={
-              sharedAgent.status === 'failed' ? sharedAgent.error : null
-            }
-          />
-        )}
-      </div>
-
-      {/* Setup-instructions block — moved below the primary actions so it
-          reads as "here's HOW to make Begin work if you want your own
-          agent" rather than as the gateway to the page. */}
+      {/* While the bridge mints the session code we can't render either
+          tab's contents (PairingPanel needs the printed command, the
+          shared path needs a code to POST to /agents/spawn). Show a
+          single line of status copy until `pairing` resolves; the table
+          of CTAs reveals itself below it. */}
       {!pairing ? (
         <p style={{ color: '#6a6660', fontSize: 12, letterSpacing: '0.2em' }}>
           {proxyOk === false ? 'BRIDGE OFFLINE' : 'OPENING BRIDGE…'}
         </p>
-      ) : sharedAgentEngaged ? (
-        // Player picked the shared-agent path. Pairing-panel real estate
-        // becomes a status readout — they have nothing to set up.
-        <SharedAgentPanel status={sharedAgent.status} />
       ) : (
-        <PairingPanel
-          command={pairing.hermesCommand}
-          prompt={pairing.hermesPrompt}
-          code={pairing.code}
-        />
+        <>
+          {/* Top-level tab row — splits the intro into two clearly
+              separated paths so a fresh visitor never has to scan the
+              page to figure out which controls apply to them. Styled
+              identically to the Auto/Manual sub-tabs inside PairingPanel
+              for consistency. The BYO tab is locked (greyed) while a
+              shared spawn is queued/spawning/active — switching tabs in
+              that window would visually orphan the running process. */}
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              width: '100%',
+              maxWidth: 520,
+            }}
+          >
+            <TabButton
+              active={topTab === 'byo'}
+              onClick={() => {
+                if (!sharedAgentEngaged) setTopTab('byo');
+              }}
+              disabled={sharedAgentEngaged}
+            >
+              I have Hermes
+            </TabButton>
+            <TabButton
+              active={topTab === 'shared'}
+              onClick={() => setTopTab('shared')}
+            >
+              I don't have Hermes
+            </TabButton>
+          </div>
+
+          {topTab === 'byo' ? (
+            <ByoPath
+              agentConnected={agentConnected}
+              onBegin={onBegin}
+              command={pairing.hermesCommand}
+              prompt={pairing.hermesPrompt}
+              code={pairing.code}
+            />
+          ) : (
+            <SharedPath
+              sessionCode={pairing.code}
+              agentConnected={agentConnected}
+              sharedAgent={sharedAgent}
+              sharedAgentEngaged={sharedAgentEngaged}
+              onBegin={onBegin}
+              onRequesting={setSharedAgentRequesting}
+              onResponse={applySharedAgentResponse}
+            />
+          )}
+        </>
       )}
       </div>
     </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Per-tab content blocks. Both share the same "status row → BEGIN button →
+// path-specific controls" rhythm so that switching tabs feels like
+// changing a single panel, not jumping between two unrelated screens.
+//
+// We intentionally repeat StatusRow + BeginButton inside each path rather
+// than hoisting them above the tab content — the wording on the status
+// row differs ("waiting for your Hermes" vs "bridge spawning") and the
+// BEGIN button stays disabled until the matching path actually pairs an
+// agent, so hoisting would just push conditionals into the parent.
+// -----------------------------------------------------------------------------
+function ByoPath({
+  agentConnected,
+  onBegin,
+  command,
+  prompt,
+  code,
+}: {
+  agentConnected: boolean;
+  onBegin: () => void;
+  command: string;
+  prompt: string;
+  code: string;
+}) {
+  return (
+    <>
+      <StatusRow
+        ok={agentConnected}
+        label={agentConnected ? 'AGENT PAIRED' : 'WAITING FOR YOUR HERMES…'}
+      />
+      <BeginButton enabled={agentConnected} onClick={onBegin} />
+      <PairingPanel command={command} prompt={prompt} code={code} />
+    </>
+  );
+}
+
+function SharedPath({
+  sessionCode,
+  agentConnected,
+  sharedAgent,
+  sharedAgentEngaged,
+  onBegin,
+  onRequesting,
+  onResponse,
+}: {
+  sessionCode: string;
+  agentConnected: boolean;
+  sharedAgent: {
+    status:
+      | 'idle'
+      | 'requesting'
+      | 'queued'
+      | 'spawning'
+      | 'active'
+      | 'expired'
+      | 'failed';
+    position: number | null;
+    expiresAt: number | null;
+    error: string | null;
+  };
+  sharedAgentEngaged: boolean;
+  onBegin: () => void;
+  onRequesting: () => void;
+  onResponse: (r: {
+    status:
+      | 'idle'
+      | 'requesting'
+      | 'queued'
+      | 'spawning'
+      | 'active'
+      | 'expired'
+      | 'failed';
+    position?: number;
+    expiresAt?: number;
+    error?: string;
+  }) => void;
+}) {
+  const statusLabel = agentConnected
+    ? 'AGENT PAIRED'
+    : sharedAgentEngaged
+    ? 'BRIDGE IS SPAWNING YOUR AGENT…'
+    : 'PICK A VOICE AND HIT PLAY';
+  return (
+    <>
+      <StatusRow ok={agentConnected} label={statusLabel} />
+      <BeginButton enabled={agentConnected} onClick={onBegin} />
+      {sharedAgentEngaged ? (
+        <SharedAgentPanel status={sharedAgent.status} />
+      ) : (
+        <SharedAgentButton
+          sessionCode={sessionCode}
+          onRequesting={onRequesting}
+          onResponse={onResponse}
+          lastError={
+            sharedAgent.status === 'failed' ? sharedAgent.error : null
+          }
+        />
+      )}
+    </>
+  );
+}
+
+function StatusRow({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <StatusDot ok={ok} />
+      <span
+        style={{
+          fontSize: 12,
+          letterSpacing: '0.2em',
+          color: ok ? '#7be0d4' : '#6a6660',
+        }}
+      >
+        {label}
+      </span>
+    </div>
+  );
+}
+
+function BeginButton({
+  enabled,
+  onClick,
+}: {
+  enabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={!enabled}
+      style={{
+        padding: '12px 28px',
+        letterSpacing: '0.3em',
+        fontSize: 13,
+        background: enabled ? '#d8d4cf' : 'transparent',
+        color: enabled ? '#050507' : '#3a3a3e',
+        border: `1px solid ${enabled ? '#d8d4cf' : '#3a3a3e'}`,
+        cursor: enabled ? 'pointer' : 'default',
+        textTransform: 'uppercase',
+        transition: 'background 200ms, color 200ms, border 200ms',
+      }}
+    >
+      Begin descent
+    </button>
   );
 }
 
@@ -306,9 +448,11 @@ function SharedAgentButton({
         width: 'min(460px, 100%)',
       }}
     >
-      {/* Helper sits ABOVE the picker — it's a question the helper text
-          asks ("don't have your own agent?"), the picker + button below
-          are the answer. Reading order: question first, action second. */}
+      {/* Heading for the voice picker. The "don't have an agent?" framing
+          that used to live here became redundant once the top-level tabs
+          made the path explicit — players who see this label have already
+          picked the shared route. The label now answers the next
+          question instead: "what kind of companion?". */}
       <span
         style={{
           fontSize: 10,
@@ -320,7 +464,7 @@ function SharedAgentButton({
           maxWidth: 360,
         }}
       >
-        DON'T HAVE YOUR OWN AGENT? WE'LL LAUNCH ONE FOR YOU
+        CHOOSE YOUR COMPANION'S PERSONALITY
       </span>
 
       {/* Pill row — four voice presets. Flex wrap so on narrow mobile
@@ -941,15 +1085,25 @@ function Inline({ children }: { children: React.ReactNode }) {
 function TabButton({
   active,
   onClick,
+  disabled,
   children,
 }: {
   active: boolean;
   onClick: () => void;
+  /** When true, the tab is non-interactive. We keep it visually present
+   *  (not hidden) so the player still sees that the other path exists —
+   *  it just can't be activated while the current one holds a shared
+   *  spawn slot. */
+  disabled?: boolean;
   children: React.ReactNode;
 }) {
+  // Three styling tiers: active (orange fill), disabled-inactive (dim grey,
+  // not clickable), normal-inactive (mid grey, hover-ready).
+  const muted = disabled && !active;
   return (
     <button
-      onClick={onClick}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
       style={{
         flex: 1,
         padding: '10px 14px',
@@ -958,10 +1112,11 @@ function TabButton({
         textTransform: 'uppercase',
         fontFamily: 'inherit',
         background: active ? '#c9885b' : 'transparent',
-        color: active ? '#050507' : '#a09d99',
-        border: `1px solid ${active ? '#c9885b' : '#3a3a3e'}`,
-        cursor: active ? 'default' : 'pointer',
-        transition: 'background 160ms ease, color 160ms ease, border 160ms ease',
+        color: active ? '#050507' : muted ? '#4a4a4e' : '#a09d99',
+        border: `1px solid ${active ? '#c9885b' : muted ? '#2a2a2e' : '#3a3a3e'}`,
+        cursor: active ? 'default' : disabled ? 'not-allowed' : 'pointer',
+        opacity: muted ? 0.6 : 1,
+        transition: 'background 160ms ease, color 160ms ease, border 160ms ease, opacity 160ms ease',
       }}
     >
       {children}
