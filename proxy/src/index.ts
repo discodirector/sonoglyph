@@ -33,6 +33,11 @@ import { isAddress } from 'viem';
 import type { ClientMessage, ServerMessage } from './protocol.js';
 import { AgentPool } from './agents/pool.js';
 import { isValidPersonalityKey, type PersonalityKey } from './agents/spawn.js';
+import {
+  checkMintAllowed,
+  reserveMintSlot,
+  releaseMintSlot,
+} from './mintRateLimit.js';
 
 const PORT = Number(process.env.PROXY_PORT ?? 8787);
 const PUBLIC_BASE_URL =
@@ -348,10 +353,58 @@ app.post('/mint', async (c) => {
     );
   }
 
+  // Per-IP rate limit. Caddy forwards the real client IP via
+  // X-Forwarded-For; falling back to X-Real-IP and finally to a
+  // sentinel string keeps the bucket coherent even in local dev where
+  // no proxy is in front. The 'unknown' bucket exists mostly to make
+  // unproxied dev requests visible (they'll share one slot pool) — in
+  // production every request is XFF-tagged.
+  //
+  // Policy lives in mintRateLimit.ts: 2 mints per IP per 48h. The
+  // intent is to keep airdrop farmers from rotating fresh wallets
+  // through one IP — the on-chain contract enforces one-mint-per-
+  // address but cannot see IPs, so this is the brake one layer up.
+  // Cached-result returns above this check are intentionally free:
+  // an idempotent retry of an already-minted session should never be
+  // counted as a new mint.
+  const xff = c.req.header('x-forwarded-for')?.split(',')[0]?.trim();
+  const ip = xff || c.req.header('x-real-ip') || 'unknown';
+  const decision = checkMintAllowed(ip);
+  if (!decision.allowed) {
+    console.warn(
+      `[mint ${code}] rate-limited ip=${ip} (used=${decision.used}/` +
+        `${decision.limit}, retryAfterSec=${decision.retryAfterSec})`,
+    );
+    return c.json(
+      {
+        error:
+          `mint rate limit reached for this IP (${decision.used}/${decision.limit} ` +
+          `in the last 48 h) — try again in ` +
+          `${Math.ceil((decision.retryAfterSec ?? 0) / 3600)} h`,
+        retryAfterSec: decision.retryAfterSec,
+        used: decision.used,
+        limit: decision.limit,
+      },
+      429,
+      decision.retryAfterSec
+        ? { 'Retry-After': String(decision.retryAfterSec) }
+        : undefined,
+    );
+  }
+
   console.log(
-    `[mint ${code}] minting to ${playerAddress} (audioCid=${payload.audioCid}, ` +
-      `glyph=${payload.glyph.length}ch, journal=${payload.journal.length}ch)`,
+    `[mint ${code}] minting to ${playerAddress} from ip=${ip} ` +
+      `(slot ${decision.used + 1}/${decision.limit}, ` +
+      `audioCid=${payload.audioCid}, glyph=${payload.glyph.length}ch, ` +
+      `journal=${payload.journal.length}ch)`,
   );
+
+  // Reserve a slot BEFORE the chain call so two concurrent requests
+  // from the same IP can't both pass checkMintAllowed during the
+  // ~1-2 s that mintSonoglyph is awaiting an RPC response. On failure
+  // we release it, so a transient RPC blip doesn't permanently burn a
+  // slot.
+  const slot = reserveMintSlot(ip);
 
   try {
     const result = await mintSonoglyph({
@@ -374,6 +427,7 @@ app.post('/mint', async (c) => {
       cached: false,
     });
   } catch (err) {
+    releaseMintSlot(ip, slot);
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[mint ${code}] failed:`, message);
     return c.json({ error: message }, 500);
