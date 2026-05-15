@@ -165,13 +165,13 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
               }}
               disabled={sharedAgentEngaged}
             >
-              I have Hermes
+              I have agent
             </TabButton>
             <TabButton
               active={topTab === 'shared'}
               onClick={() => setTopTab('shared')}
             >
-              I don't have Hermes
+              I don't have agent
             </TabButton>
           </div>
 
@@ -279,14 +279,28 @@ function SharedPath({
   }) => void;
 }) {
   const statusLabel = agentConnected
-    ? 'AGENT PAIRED'
+    ? 'AGENT PAIRED — STARTING DESCENT…'
     : sharedAgentEngaged
     ? 'BRIDGE IS SPAWNING YOUR AGENT…'
     : 'PICK A VOICE AND HIT PLAY';
+
+  // Auto-begin on the shared path. The BYO tab keeps an explicit BEGIN
+  // button because the player there is in control of when their terminal
+  // is ready; the shared tab, however, only reaches `agentConnected=true`
+  // AFTER the player already committed by clicking "Play without your own
+  // agent", so making them click a second button at that point is empty
+  // ceremony. We require both `sharedAgentEngaged` and `agentConnected`
+  // so we don't accidentally auto-begin if a player jumps from BYO (where
+  // they already paired) into the shared tab without engaging the pool.
+  useEffect(() => {
+    if (sharedAgentEngaged && agentConnected) {
+      onBegin();
+    }
+  }, [sharedAgentEngaged, agentConnected, onBegin]);
+
   return (
     <>
       <StatusRow ok={agentConnected} label={statusLabel} />
-      <BeginButton enabled={agentConnected} onClick={onBegin} />
       {sharedAgentEngaged ? (
         <SharedAgentPanel status={sharedAgent.status} />
       ) : (
@@ -632,7 +646,7 @@ function SharedAgentPanel({
       : status === 'queued'
       ? 'A queue overlay will appear shortly with your position.'
       : status === 'active'
-      ? 'The bridge has handed off to your agent. Hit BEGIN to start the descent.'
+      ? 'The bridge has handed off to your agent. Your descent is starting…'
       : 'Hold on a beat — this usually takes about five seconds. ' +
         'The pairing light will turn green when your agent connects.';
 
