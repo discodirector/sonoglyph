@@ -34,17 +34,18 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
   const sharedAgentEngaged =
     sharedAgent.status !== 'idle' && sharedAgent.status !== 'failed';
 
-  // Top-level tab — which path the player is reading right now. Default is
-  // BYO ("I have Hermes") since this is a Hermes-hackathon submission and
-  // the primary audience already has a local agent. The shared tab is the
-  // explicit fallback for newcomers.
+  // Top-level tab — which path the player is reading right now. Initial
+  // state is `null`, meaning NEITHER tab is selected. A fresh visitor
+  // therefore sees only the title block + tab row (no setup instructions
+  // dumped on them up-front) and must explicitly pick a path.
   //
   // Auto-flip rule: if a shared agent is already engaged (queued / spawning
   // / active) we force the tab to 'shared' so a stray click on the BYO tab
-  // can't visually orphan the spawned process. Players who want to bail
-  // from a queued spawn use the page-level overlay or close the tab; the
-  // BYO tab stays disabled (greyed) while engagement is live.
-  const [topTab, setTopTab] = useState<'byo' | 'shared'>('byo');
+  // — or a page refresh that lands on `null` — can't visually orphan the
+  // spawned process. Players who want to bail from a queued spawn use the
+  // page-level overlay or close the tab; the BYO tab stays disabled
+  // (greyed) while engagement is live.
+  const [topTab, setTopTab] = useState<'byo' | 'shared' | null>(null);
   useEffect(() => {
     if (sharedAgentEngaged && topTab !== 'shared') setTopTab('shared');
   }, [sharedAgentEngaged, topTab]);
@@ -82,10 +83,15 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          justifyContent: 'center',
+          // flex-start (not center) so the title + tab row stay anchored
+          // near the top of the viewport instead of bouncing toward the
+          // middle when a tab's content expands the flex column. The
+          // adaptive top padding (clamp) gives the hero block breathing
+          // room on tall desktops without crushing it on mobile.
+          justifyContent: 'flex-start',
           gap: 24,
           textAlign: 'center',
-          padding: '32px 24px',
+          padding: 'clamp(48px, 10vh, 120px) 24px 64px',
         }}
       >
       <h1
@@ -175,7 +181,7 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
             </TabButton>
           </div>
 
-          {topTab === 'byo' ? (
+          {topTab === 'byo' && (
             <ByoPath
               agentConnected={agentConnected}
               onBegin={onBegin}
@@ -183,7 +189,8 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
               prompt={pairing.hermesPrompt}
               code={pairing.code}
             />
-          ) : (
+          )}
+          {topTab === 'shared' && (
             <SharedPath
               sessionCode={pairing.code}
               agentConnected={agentConnected}
