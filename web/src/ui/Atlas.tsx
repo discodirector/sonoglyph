@@ -91,6 +91,37 @@ export function Atlas() {
     };
   }, []);
 
+  // Atlas needs the page to scroll AND the user to be able to select text
+  // (session codes, glyphs, etc). styles.css clamps both globally for the
+  // 3D descent scene; we override those bits while Atlas is mounted and
+  // restore on unmount so navigating back to the descent gets the right
+  // viewport behaviour. Touching the inline style rather than swapping a
+  // class means we don't need to maintain CSS in two places.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const prev = {
+      htmlOverflow: document.documentElement.style.overflow,
+      bodyOverflow: document.body.style.overflow,
+      bodyUserSelect: document.body.style.userSelect,
+      htmlHeight: document.documentElement.style.height,
+      bodyHeight: document.body.style.height,
+    };
+    document.documentElement.style.overflow = 'auto';
+    document.body.style.overflow = 'auto';
+    document.body.style.userSelect = 'auto';
+    // Drop the 100% height locks so the page can grow with content;
+    // otherwise overflow:auto inside a 100%-tall body just clips.
+    document.documentElement.style.height = 'auto';
+    document.body.style.height = 'auto';
+    return () => {
+      document.documentElement.style.overflow = prev.htmlOverflow;
+      document.body.style.overflow = prev.bodyOverflow;
+      document.body.style.userSelect = prev.bodyUserSelect;
+      document.documentElement.style.height = prev.htmlHeight;
+      document.body.style.height = prev.bodyHeight;
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     setStatus('loading');
@@ -734,10 +765,7 @@ function DetailModal({
               flexWrap: 'wrap',
             }}
           >
-            <ShareOnX
-              tokenId={token.tokenId}
-              archetype={a.archetype}
-            />
+            <ShareOnX tokenId={token.tokenId} />
             <DownloadVideo tokenId={token.tokenId} />
           </div>
         )}
@@ -745,29 +773,115 @@ function DetailModal({
         <div
           style={{
             marginTop: 18,
-            fontSize: 10,
-            letterSpacing: '0.18em',
-            color: '#6a6660',
             display: 'flex',
             flexWrap: 'wrap',
-            gap: '6px 18px',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
           }}
         >
-          <span>SESSION {token.sessionCode}</span>
-          <span>MINTED {new Date(token.mintedAt * 1000).toISOString().slice(0, 10)}</span>
-          {token.audioCid && (
-            <a
-              href={`https://gateway.pinata.cloud/ipfs/${token.audioCid}`}
-              target="_blank"
-              rel="noreferrer"
-              style={{ color: '#6a6660', textDecoration: 'none' }}
-            >
-              IPFS ↗
-            </a>
-          )}
+          <div
+            style={{
+              fontSize: 10,
+              letterSpacing: '0.18em',
+              color: '#6a6660',
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '6px 18px',
+            }}
+          >
+            <span>SESSION {token.sessionCode}</span>
+            <span>MINTED {new Date(token.mintedAt * 1000).toISOString().slice(0, 10)}</span>
+            {token.audioCid && (
+              <a
+                href={`https://gateway.pinata.cloud/ipfs/${token.audioCid}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: '#6a6660', textDecoration: 'none' }}
+              >
+                IPFS ↗
+              </a>
+            )}
+          </div>
+          <CopyLink tokenId={token.tokenId} />
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CopyLink — small clipboard button at the bottom-right of the detail
+// modal. Surfaces the canonical /atlas/:id deep link so a viewer can grab
+// it for non-X channels (DMs, notes, Discord posts) without having to
+// hand-copy from the URL bar.
+//
+// We use navigator.clipboard.writeText when available and fall back to a
+// classic execCommand path for the rare browser that doesn't expose it
+// (older Safari over HTTP, sandboxed iframes). The "COPIED" pulse uses a
+// 1.6 s timer because anything shorter reads as a flicker and anything
+// longer collides with the user reaching for their next click.
+// ---------------------------------------------------------------------------
+function CopyLink({ tokenId }: { tokenId: number }) {
+  const [copied, setCopied] = useState(false);
+
+  const onClick = async () => {
+    const url = `${window.location.origin}/atlas/${tokenId}`;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        // Legacy fallback: stamp a hidden textarea, select, execCommand.
+        // Works in non-secure contexts where the async clipboard API is
+        // blocked by the browser.
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch (err) {
+      console.warn('[atlas] copy failed:', err);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Copy link to this Sonoglyph"
+      style={{
+        background: 'transparent',
+        border: '1px solid #2a2a2e',
+        color: copied ? '#c9885b' : '#6a6660',
+        fontFamily: 'inherit',
+        fontSize: 10,
+        letterSpacing: '0.22em',
+        padding: '6px 12px',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        transition: 'color 120ms ease, border-color 120ms ease',
+        borderColor: copied ? '#c9885b' : '#2a2a2e',
+      }}
+      onMouseEnter={(e) => {
+        if (!copied) e.currentTarget.style.borderColor = '#4a463f';
+      }}
+      onMouseLeave={(e) => {
+        if (!copied) e.currentTarget.style.borderColor = '#2a2a2e';
+      }}
+    >
+      {copied ? 'COPIED' : 'COPY LINK'}
+      <span style={{ fontSize: 11, letterSpacing: 0 }}>
+        {copied ? '✓' : '⧉'}
+      </span>
+    </button>
   );
 }
 
@@ -946,26 +1060,24 @@ function AudioPlayer({ cid }: { cid: string }) {
 // to flag the audio payload that Twitter renders inline from the og:video
 // tag once step B (MP4 generation) ships.
 // ---------------------------------------------------------------------------
-function ShareOnX({
-  tokenId,
-  archetype,
-}: {
-  tokenId: number;
-  archetype: string;
-}) {
-  // Build the intent URL fresh on every click so a future archetype
-  // recalibration is reflected without remounting. Twitter intent ignores
-  // duplicated URLs (if you put it in text AND url, it dedupes), so we
-  // pass the URL only via `url` and keep the text URL-free.
+function ShareOnX({ tokenId }: { tokenId: number }) {
+  // Tweet text layout we want:
+  //
+  //   How does this Sonoglyph sound?
+  //
+  //   https://sonoglyph.xyz/atlas/N
+  //
+  // Twitter intent's `text` + `url` params concatenate the URL onto the
+  // end of the text on the same line, which collapses the layout. Putting
+  // the URL inside `text` with explicit \n\n preserves the blank-line
+  // separator and Twitter still parses it as the card source. We don't
+  // need to pass `url` separately when it's already in the body.
   const onClick = () => {
     const url = `${window.location.origin}/atlas/${tokenId}`;
-    const text =
-      `I composed Sonoglyph #${tokenId} — a ${archetype} glyph on Monad. ` +
-      `Listen right on X.`;
+    const text = `How does this Sonoglyph sound?\n\n${url}`;
     const intent =
       'https://twitter.com/intent/tweet' +
-      `?text=${encodeURIComponent(text)}` +
-      `&url=${encodeURIComponent(url)}`;
+      `?text=${encodeURIComponent(text)}`;
     // noopener: the intent page is on x.com; we don't want it to retain
     // a reference back to the atlas tab. width/height keep it as a small
     // popup on desktop; mobile browsers ignore the geometry and open a
