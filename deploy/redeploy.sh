@@ -31,6 +31,18 @@ CADDY_DST=/etc/caddy/Caddyfile
 
 cd "$REPO"
 
+# Sync node_modules against the (committed) package-lock files. We use
+# `npm install` rather than `npm ci` because ci wipes node_modules every
+# time — wasteful when the lockfile hasn't changed. install is idempotent
+# and skips work when everything's already on disk; when the lockfile
+# changes (new bridge dep like satori/resvg) it pulls the missing packages
+# without disturbing the rest.
+echo "[deploy] syncing web dependencies..."
+( cd web && npm install --no-audit --no-fund )
+
+echo "[deploy] syncing proxy dependencies..."
+( cd proxy && npm install --no-audit --no-fund )
+
 echo "[deploy] building web..."
 ( cd web && npm run build )
 

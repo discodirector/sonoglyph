@@ -31,6 +31,25 @@ export default defineConfig({
         target: 'http://localhost:8787',
         changeOrigin: true,
       },
+      // Mint supply counter — used by Finale before/after mint.
+      '/supply': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+      },
+      // OG share-card PNGs. The crawler-facing meta-injection at
+      // /atlas/:id is NOT proxied in dev because Vite's index.html
+      // catch-all lets the SPA hydrate normally; meta injection only
+      // matters for production crawlers and is hit-tested via curl
+      // against the bridge port directly.
+      '/og': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+      },
+      // Frontend feature flags (share button gate, etc).
+      '/config': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+      },
     },
   },
 });

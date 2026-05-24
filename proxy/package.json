@@ -11,9 +11,11 @@
   "dependencies": {
     "@hono/node-server": "^1.13.7",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@resvg/resvg-js": "^2.6.2",
     "dotenv": "^16.4.7",
     "hono": "^4.6.13",
     "js-yaml": "^4.1.0",
+    "satori": "^0.26.0",
     "tsx": "^4.19.2",
     "viem": "^2.31.0",
     "ws": "^8.20.0"

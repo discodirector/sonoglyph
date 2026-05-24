@@ -3,16 +3,21 @@
 # Caddy auto-obtains and renews TLS for any domain it serves over HTTPS.
 #
 # Layout:
-#   /ws*        → bridge :8787  (WebSocket)
-#   /mcp*       → bridge :8787  (Streamable HTTP MCP, no buffering)
-#   /pin*       → bridge :8787  (IPFS pinning POST endpoints)
-#   /mint       → bridge :8787  (sign + broadcast Sonoglyph.mintDescent)
-#   /supply     → bridge :8787  (cached lastTokenId / MAX_SUPPLY for Finale UI)
-#   /collection → bridge :8787  (full minted-token scan for the atlas page)
-#   /agents     → bridge :8787  (POST /agents/spawn — spawn ephemeral Hermes
-#                                for players without their own)
-#   /health     → bridge :8787
-#   else        → static frontend (SPA fallback handles /atlas etc.)
+#   /ws*          → bridge :8787  (WebSocket)
+#   /mcp*         → bridge :8787  (Streamable HTTP MCP, no buffering)
+#   /pin*         → bridge :8787  (IPFS pinning POST endpoints)
+#   /mint         → bridge :8787  (sign + broadcast Sonoglyph.mintDescent)
+#   /supply       → bridge :8787  (cached lastTokenId / MAX_SUPPLY for Finale UI)
+#   /collection   → bridge :8787  (full minted-token scan for the atlas page)
+#   /config       → bridge :8787  (feature flags read on Atlas mount)
+#   /og/<id>.png  → bridge :8787  (Twitter/Open Graph card PNG, per token)
+#   /atlas/<id>   → bridge :8787  (SPA shell + per-token OG meta injection;
+#                                  /atlas without an id stays SPA-served so
+#                                  the gallery index keeps generic meta)
+#   /agents       → bridge :8787  (POST /agents/spawn — spawn ephemeral Hermes
+#                                  for players without their own)
+#   /health       → bridge :8787
+#   else          → static frontend (SPA fallback handles /atlas etc.)
 #
 # `handle` accepts a single matcher token, so we use named matchers for
 # the path lists. Without `handle`, Caddy's default directive ordering
@@ -68,6 +73,27 @@ sonoglyph.xyz, www.sonoglyph.xyz {
 		# the long path. Caddy's default reverse_proxy timeout is plenty
 		# for that, but if Hetzner ever puts an idle-timeout proxy in
 		# front of us we'd want flush_interval -1 here too.
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	handle /config {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	# Twitter/Open Graph card PNG. Regex matcher so a bare /og/ or random
+	# /og/<word> falls through to the SPA (which 404s on its own), keeping
+	# the bridge route narrow.
+	@ogPng path_regexp og ^/og/[0-9]+\.png$
+	handle @ogPng {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	# Per-token atlas pages with injected OG meta. Important: this matches
+	# ONLY /atlas/<digits>, not /atlas (which stays SPA-served below). We
+	# deliberately keep the gallery index off the bridge so a cold deploy
+	# doesn't put the index page behind a bridge boot.
+	@atlasToken path_regexp atlas_token ^/atlas/[0-9]+$
+	handle @atlasToken {
 		reverse_proxy 127.0.0.1:8787
 	}
 

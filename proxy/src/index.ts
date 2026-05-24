@@ -33,6 +33,7 @@ import {
   mintSonoglyph,
   getSupplyInfo,
   fetchAllDescents,
+  fetchOneDescent,
   type DescentSummary,
 } from './chain.js';
 import { isAddress } from 'viem';
@@ -44,6 +45,7 @@ import {
   reserveMintSlot,
   releaseMintSlot,
 } from './mintRateLimit.js';
+import { getOrRenderOgPng, renderAtlasHtml } from './og.js';
 
 const PORT = Number(process.env.PROXY_PORT ?? 8787);
 const PUBLIC_BASE_URL =
@@ -261,6 +263,118 @@ app.get('/collection', async (c) => {
     console.warn('[collection] scan failed:', message);
     return c.json({ error: message }, 503);
   }
+});
+
+// -----------------------------------------------------------------------------
+// Shareable token URL plumbing.
+//
+// Twitter, Discord, Slack, Telegram, etc. all read OG/Twitter meta from a
+// server-rendered HTML response — they do NOT execute JS. So when someone
+// shares https://sonoglyph.xyz/atlas/42 we need that exact URL to return
+// HTML whose <head> contains the per-token meta block. The SPA continues to
+// hydrate normally; Atlas.tsx already deep-links from /atlas/:id into the
+// detail modal.
+//
+// The PNG referenced by og:image is rendered on demand at /og/:id.png,
+// cached to disk by token id, and revalidated only when OG_CACHE_VERSION
+// bumps (post-final-calibration recalibration scenario).
+//
+// Why we look up the token via in-memory cache OR a single descentOf call
+// (rather than waiting for the full /collection scan): Twitter's crawler
+// gives a request maybe ~10 s before giving up. A 30 s cold-cache scan
+// would mean every fresh-deploy share renders the fallback "Sonoglyph #N"
+// generic card. The single-token fetch is ~500 ms, well inside budget.
+// -----------------------------------------------------------------------------
+
+/** Pluck a token from the collection cache without triggering a refresh. */
+function tokenFromCache(id: number): DescentSummary | null {
+  if (!collectionCache) return null;
+  return collectionCache.value.find((t) => t.tokenId === id) ?? null;
+}
+
+/** Look up by cache first, then single-token chain read. Null on miss. */
+async function lookupToken(id: number): Promise<DescentSummary | null> {
+  const cached = tokenFromCache(id);
+  if (cached) return cached;
+  return fetchOneDescent(id);
+}
+
+function parseTokenId(raw: string): number | null {
+  // Accept "5" or "5.png" — the OG endpoint is served at /og/:id.png so we
+  // strip the suffix here rather than embedding the parse in two places.
+  const m = raw.match(/^(\d+)(?:\.png)?$/);
+  if (!m) return null;
+  const id = Number.parseInt(m[1], 10);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+/**
+ * Server-rendered atlas page for a single token. Returns the SPA shell
+ * with OG/Twitter meta tags spliced into the head. The browser still
+ * runs the full SPA — this exists purely for crawlers.
+ */
+app.get('/atlas/:id{[0-9]+}', async (c) => {
+  const id = parseTokenId(c.req.param('id'));
+  if (!id) return c.text('not found', 404);
+  const origin = PUBLIC_BASE_URL.replace(/\/+$/, '');
+  const token = await lookupToken(id);
+  try {
+    const html = await renderAtlasHtml(
+      origin,
+      id,
+      token ? { tokenId: token.tokenId, glyph: token.glyph } : null,
+    );
+    // Short cache: 60 s lets a sudden burst of shares hit the same HTML
+    // without re-stating index.html, but still picks up redeploys fast.
+    c.header('Cache-Control', 'public, max-age=60');
+    c.header('Content-Type', 'text/html; charset=utf-8');
+    return c.body(html);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[atlas/:id] render failed for #${id}: ${msg}`);
+    // 503 rather than 500 so Twitter retries on its own schedule instead
+    // of permanently blacklisting the URL.
+    return c.text(`atlas render failed: ${msg}`, 503);
+  }
+});
+
+/**
+ * 1200×630 PNG card for crawlers and download-then-attach manual sharing.
+ *
+ * Aggressive Cache-Control: PNGs are deterministic per (tokenId, OG_CACHE
+ * _VERSION). 24 h is plenty for the crawler hop chain to keep one copy in
+ * its CDN. We also set immutable so reload buttons don't refetch.
+ */
+app.get('/og/:id{[0-9]+}.png', async (c) => {
+  const id = parseTokenId(c.req.param('id'));
+  if (!id) return c.text('not found', 404);
+  const token = await lookupToken(id);
+  if (!token) return c.text('token not found', 404);
+  try {
+    const png = await getOrRenderOgPng({ tokenId: id, glyph: token.glyph });
+    c.header('Content-Type', 'image/png');
+    c.header('Cache-Control', 'public, max-age=86400, immutable');
+    return c.body(png as unknown as ArrayBuffer);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[og/:id] render failed for #${id}: ${msg}`);
+    return c.text(`og render failed: ${msg}`, 500);
+  }
+});
+
+/**
+ * Runtime feature flags surfaced to the frontend. Right now this is just
+ * the share-button gate — we keep it disabled until supply hits 250 and
+ * the rarity calibration is frozen, because pre-freeze rank values can
+ * shift between mints (and a tweeted card showing "RANK 7" would lie
+ * after the next mint reshuffles).
+ *
+ * Toggle by setting SHARE_ENABLED=true in .env on the VPS; the frontend
+ * polls this once on Atlas mount.
+ */
+app.get('/config', (c) => {
+  const shareEnabled = process.env.SHARE_ENABLED === 'true';
+  return c.json({ shareEnabled });
 });
 
 // -----------------------------------------------------------------------------

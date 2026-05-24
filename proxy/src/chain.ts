@@ -426,6 +426,59 @@ export async function fetchAllDescents(): Promise<DescentSummary[]> {
   return out;
 }
 
+/**
+ * Single-token variant of {@link fetchAllDescents}. Used by /og/:id.png and
+ * /atlas/:id when the bridge's full-collection cache is cold and we'd
+ * rather spend 1 RPC call than 30 s of full-scan time. Returns null if
+ * the token doesn't exist or the chain call exhausts retries.
+ *
+ * Backoff mirrors fetchAllDescents (0.5/1/2/4/8 s) so we get the same
+ * retry envelope without duplicating the policy.
+ */
+export async function fetchOneDescent(id: number): Promise<DescentSummary | null> {
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const ctx = loadContext();
+  const attemptOnce = async (attempt: number): Promise<DescentSummary | null> => {
+    try {
+      const d = (await ctx.publicClient.readContract({
+        address: ctx.contractAddress,
+        abi: SONOGLYPH_ABI,
+        functionName: 'descentOf',
+        args: [BigInt(id)],
+      })) as {
+        glyph: string;
+        journal: string;
+        audioCid: string;
+        sessionCode: string;
+        creator: `0x${string}`;
+        mintedAt: bigint;
+      };
+      // descentOf returns the zero struct for non-existent ids on this
+      // contract (no revert). A zero mintedAt is our "token absent" tell.
+      if (Number(d.mintedAt) === 0) return null;
+      return {
+        tokenId: id,
+        glyph: d.glyph,
+        sessionCode: d.sessionCode,
+        creator: d.creator,
+        mintedAt: Number(d.mintedAt),
+        audioCid: d.audioCid,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const is429 = msg.includes('429');
+      if (is429 && attempt < 6) {
+        const backoff = 500 * 2 ** (attempt - 1);
+        await new Promise((r) => setTimeout(r, backoff));
+        return attemptOnce(attempt + 1);
+      }
+      console.warn(`[og] descentOf(#${id}) failed: ${msg.slice(0, 120)}`);
+      return null;
+    }
+  };
+  return attemptOnce(1);
+}
+
 /** Used by /health to surface mint-readiness. Doesn't hit the chain. */
 export function chainConfigStatus(): {
   hasPrivateKey: boolean;

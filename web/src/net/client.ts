@@ -223,6 +223,29 @@ export async function fetchCollection(): Promise<CollectionResponse> {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime feature flags surfaced by the bridge. Right now this is just the
+// share-button gate (we keep it disabled until supply hits 250 and the
+// rarity calibration is frozen). Defaults to {shareEnabled:false} on any
+// network failure so a momentarily-down bridge never accidentally exposes
+// a gated UI to viewers.
+// ---------------------------------------------------------------------------
+
+export interface RuntimeConfig {
+  shareEnabled: boolean;
+}
+
+export async function fetchConfig(): Promise<RuntimeConfig> {
+  try {
+    const res = await fetch('/config');
+    if (!res.ok) return { shareEnabled: false };
+    const j = (await res.json()) as Partial<RuntimeConfig>;
+    return { shareEnabled: Boolean(j.shareEnabled) };
+  } catch {
+    return { shareEnabled: false };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Shared-agent spawn — for players who don't have their own Hermes install.
 // Posts to the bridge, which forks an ephemeral hermes-CLI on the VPS,
 // paired to the same `?code=` as this WS session. Subsequent state

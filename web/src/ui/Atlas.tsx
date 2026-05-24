@@ -25,6 +25,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchCollection,
+  fetchConfig,
   type CollectionToken,
 } from '../net/client';
 import {
@@ -74,6 +75,21 @@ export function Atlas() {
   const [openId, setOpenId] = useState<number | null>(() =>
     typeof window === 'undefined' ? null : tokenIdFromPath(window.location.pathname),
   );
+  // Share button gate. Fetched once on mount; defaults to false so the
+  // button stays hidden if the bridge isn't reachable. The bridge flips
+  // this to true via SHARE_ENABLED=true in env once supply hits 250 and
+  // the rarity calibration is frozen.
+  const [shareEnabled, setShareEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchConfig().then((cfg) => {
+      if (!cancelled) setShareEnabled(cfg.shareEnabled);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -262,6 +278,7 @@ export function Atlas() {
           token={metaByToken.get(openId)!}
           analysis={ranked.find((r) => r.tokenId === openId) ?? null}
           totalCount={ranked.length}
+          shareEnabled={shareEnabled}
           onClose={closeModal}
         />
       )}
@@ -572,11 +589,13 @@ function DetailModal({
   token,
   analysis,
   totalCount,
+  shareEnabled,
   onClose,
 }: {
   token: CollectionToken;
   analysis: RankedGlyph | null;
   totalCount: number;
+  shareEnabled: boolean;
   onClose: () => void;
 }) {
   // ESC closes the modal — light affordance, no focus-trap library.
@@ -703,6 +722,15 @@ function DetailModal({
         {token.audioCid && (
           <div style={{ marginTop: 22 }}>
             <AudioPlayer cid={token.audioCid} />
+          </div>
+        )}
+
+        {shareEnabled && (
+          <div style={{ marginTop: 14 }}>
+            <ShareOnX
+              tokenId={token.tokenId}
+              archetype={a.archetype}
+            />
           </div>
         )}
 
@@ -888,6 +916,86 @@ function AudioPlayer({ cid }: { cid: string }) {
           paying for full audio download until the user clicks play. */}
       <audio ref={audioRef} src={url} preload="metadata" />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Share-on-X button — opens Twitter's intent endpoint with a pre-filled
+// tweet body and the canonical /atlas/:id URL. Twitter's crawler then
+// fetches that URL, which the bridge serves with per-token OG meta tags
+// (og:image points at /og/:id.png), so the resulting tweet renders with
+// a large summary card.
+//
+// Gating: this component only ever mounts when the bridge reports
+// shareEnabled=true. We keep it switched off until the collection mints
+// out to 250 — pre-freeze, the rarity classifier's calibration snapshot
+// can shift between mints, and a tweet promising a specific archetype is
+// brittle if a later recalibration moves a token across the boundary.
+//
+// Composition: the tweet body is "I composed Sonoglyph #N — a [Archetype]
+// glyph on Monad. Listen right on X." — phrasing chosen to read as
+// first-person from whoever shares (clicker is usually the creator) and
+// to flag the audio payload that Twitter renders inline from the og:video
+// tag once step B (MP4 generation) ships.
+// ---------------------------------------------------------------------------
+function ShareOnX({
+  tokenId,
+  archetype,
+}: {
+  tokenId: number;
+  archetype: string;
+}) {
+  // Build the intent URL fresh on every click so a future archetype
+  // recalibration is reflected without remounting. Twitter intent ignores
+  // duplicated URLs (if you put it in text AND url, it dedupes), so we
+  // pass the URL only via `url` and keep the text URL-free.
+  const onClick = () => {
+    const url = `${window.location.origin}/atlas/${tokenId}`;
+    const text =
+      `I composed Sonoglyph #${tokenId} — a ${archetype} glyph on Monad. ` +
+      `Listen right on X.`;
+    const intent =
+      'https://twitter.com/intent/tweet' +
+      `?text=${encodeURIComponent(text)}` +
+      `&url=${encodeURIComponent(url)}`;
+    // noopener: the intent page is on x.com; we don't want it to retain
+    // a reference back to the atlas tab. width/height keep it as a small
+    // popup on desktop; mobile browsers ignore the geometry and open a
+    // new tab, which is also fine.
+    window.open(intent, '_blank', 'noopener,width=600,height=600');
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        width: '100%',
+        padding: '12px 16px',
+        background: 'transparent',
+        color: '#c9885b',
+        border: '1px solid #c9885b',
+        fontFamily: 'ui-monospace, Menlo, monospace',
+        fontSize: 11,
+        letterSpacing: '0.28em',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = '#c9885b';
+        e.currentTarget.style.color = '#050507';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'transparent';
+        e.currentTarget.style.color = '#c9885b';
+      }}
+    >
+      SHARE ON X
+      <span style={{ fontSize: 12, letterSpacing: 0 }}>↗</span>
+    </button>
   );
 }
 
