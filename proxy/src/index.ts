@@ -60,6 +60,17 @@ const CORS_ORIGINS = (process.env.CORS_ORIGINS ?? 'http://localhost:5173')
 const app = new Hono();
 app.use('*', cors({ origin: CORS_ORIGINS, credentials: true }));
 
+// Catch-all error logger. Hono silently 500s on uncaught handler throws —
+// without this, a buggy route turns the whole bridge into a black box.
+// We keep the response body terse (no stack to the client) but log the
+// full error to stderr so journalctl picks it up.
+app.onError((err, c) => {
+  const msg = err instanceof Error ? err.message : String(err);
+  const stack = err instanceof Error ? err.stack ?? '' : '';
+  console.error(`[bridge] handler error on ${c.req.method} ${c.req.path}: ${msg}\n${stack}`);
+  return c.text('internal error', 500);
+});
+
 const registry = new GameRegistry();
 
 // -----------------------------------------------------------------------------
@@ -292,11 +303,18 @@ function tokenFromCache(id: number): DescentSummary | null {
   return collectionCache.value.find((t) => t.tokenId === id) ?? null;
 }
 
-/** Look up by cache first, then single-token chain read. Null on miss. */
+/** Look up by cache first, then single-token chain read. Null on miss or
+ *  on chain error — callers fall back to generic OG meta rather than 500. */
 async function lookupToken(id: number): Promise<DescentSummary | null> {
   const cached = tokenFromCache(id);
   if (cached) return cached;
-  return fetchOneDescent(id);
+  try {
+    return await fetchOneDescent(id);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[og] chain lookup failed for #${id}: ${msg.slice(0, 120)}`);
+    return null;
+  }
 }
 
 function parseTokenId(raw: string): number | null {
@@ -341,12 +359,18 @@ app.get('/atlas/:id{[0-9]+}', async (c) => {
 /**
  * 1200×630 PNG card for crawlers and download-then-attach manual sharing.
  *
+ * Path shape: `/og/:filename` rather than `/og/:id.png`. Hono's path
+ * router corrupts param extraction when a regex-constrained param is
+ * followed by a literal dot-extension (`/og/:id{[0-9]+}.png` made every
+ * route in the bridge 500), so we accept any single segment under /og/
+ * and validate `<digits>.png` manually in {@link parseTokenId}.
+ *
  * Aggressive Cache-Control: PNGs are deterministic per (tokenId, OG_CACHE
  * _VERSION). 24 h is plenty for the crawler hop chain to keep one copy in
  * its CDN. We also set immutable so reload buttons don't refetch.
  */
-app.get('/og/:id{[0-9]+}.png', async (c) => {
-  const id = parseTokenId(c.req.param('id'));
+app.get('/og/:filename', async (c) => {
+  const id = parseTokenId(c.req.param('filename'));
   if (!id) return c.text('not found', 404);
   const token = await lookupToken(id);
   if (!token) return c.text('token not found', 404);
