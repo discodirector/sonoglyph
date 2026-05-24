@@ -120,6 +120,19 @@ export interface AtlasTokenMeta {
   glyph: string;
 }
 
+export interface AtlasMetaOptions {
+  /**
+   * When true, the meta block also advertises `og:video` pointing at the
+   * MP4 endpoint. Set this from the bridge only after confirming the MP4
+   * exists on disk (otherwise crawlers like Facebook will request the
+   * video and report a broken share preview when it 404s). For Twitter
+   * cards the og:video field is largely cosmetic — the only path to
+   * inline playback on X today is the user attaching the .mp4 file
+   * manually to their tweet, which is the "Download" button on Atlas.
+   */
+  includeVideo?: boolean;
+}
+
 function escapeAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
@@ -128,6 +141,7 @@ export function buildAtlasMetaTags(
   origin: string,
   token: AtlasTokenMeta | null,
   tokenId: number,
+  options: AtlasMetaOptions = {},
 ): string {
   const url = `${origin}/atlas/${tokenId}`;
   if (!token) {
@@ -137,7 +151,13 @@ export function buildAtlasMetaTags(
     // later if the user retweets, by which time the cache is warm.
     const title = `Sonoglyph #${tokenId}`;
     const desc = 'A minted descent on Monad. Listen on Sonoglyph.';
-    return renderMetaBlock(url, title, desc, `${origin}/og/${tokenId}.png`);
+    return renderMetaBlock({
+      url,
+      title,
+      desc,
+      image: `${origin}/og/${tokenId}.png`,
+      video: options.includeVideo ? `${origin}/video/${tokenId}.mp4` : null,
+    });
   }
   const a = analyzeGlyph(token.glyph);
   const archetype = a.archetype;
@@ -149,18 +169,29 @@ export function buildAtlasMetaTags(
     `A ${archetype} glyph composed on Monad. ` +
     `${a.traits.density} · ${a.traits.form} · ${a.traits.anchor} · ` +
     `${a.traits.lexicon} · ${a.traits.symmetry}. Listen on Sonoglyph.`;
-  const image = `${origin}/og/${tokenId}.png`;
-  return renderMetaBlock(url, title, desc, image);
+  return renderMetaBlock({
+    url,
+    title,
+    desc,
+    image: `${origin}/og/${tokenId}.png`,
+    video: options.includeVideo ? `${origin}/video/${tokenId}.mp4` : null,
+  });
 }
 
-function renderMetaBlock(url: string, title: string, desc: string, image: string): string {
-  const t = escapeAttr(title);
-  const d = escapeAttr(desc);
-  const i = escapeAttr(image);
-  const u = escapeAttr(url);
-  return [
+function renderMetaBlock(args: {
+  url: string;
+  title: string;
+  desc: string;
+  image: string;
+  video: string | null;
+}): string {
+  const t = escapeAttr(args.title);
+  const d = escapeAttr(args.desc);
+  const i = escapeAttr(args.image);
+  const u = escapeAttr(args.url);
+  const tags: string[] = [
     `<meta property="og:url" content="${u}">`,
-    `<meta property="og:type" content="website">`,
+    `<meta property="og:type" content="${args.video ? 'video.other' : 'website'}">`,
     `<meta property="og:title" content="${t}">`,
     `<meta property="og:description" content="${d}">`,
     `<meta property="og:image" content="${i}">`,
@@ -170,21 +201,41 @@ function renderMetaBlock(url: string, title: string, desc: string, image: string
     `<meta name="twitter:title" content="${t}">`,
     `<meta name="twitter:description" content="${d}">`,
     `<meta name="twitter:image" content="${i}">`,
-  ].join('\n  ');
+  ];
+  if (args.video) {
+    const v = escapeAttr(args.video);
+    tags.push(
+      `<meta property="og:video" content="${v}">`,
+      `<meta property="og:video:url" content="${v}">`,
+      `<meta property="og:video:secure_url" content="${v}">`,
+      `<meta property="og:video:type" content="video/mp4">`,
+      `<meta property="og:video:width" content="1200">`,
+      `<meta property="og:video:height" content="630">`,
+    );
+  }
+  return tags.join('\n  ');
 }
 
 /**
  * Splice OG/Twitter meta tags into the SPA shell for a given tokenId.
  * Strips the existing `<title>` so the share preview matches the token
  * (rather than the static "Sonoglyph" page title).
+ *
+ * `videoReady` controls whether we advertise og:video — set this only
+ * when the bridge has confirmed the MP4 exists on disk. Otherwise a
+ * crawler will dereference and 404, which Facebook in particular treats
+ * as a broken preview and refuses to retry for ~24 h.
  */
 export async function renderAtlasHtml(
   origin: string,
   tokenId: number,
   token: AtlasTokenMeta | null,
+  videoReady: boolean = false,
 ): Promise<string> {
   const shell = await loadIndexHtml();
-  const meta = buildAtlasMetaTags(origin, token, tokenId);
+  const meta = buildAtlasMetaTags(origin, token, tokenId, {
+    includeVideo: videoReady,
+  });
   const archetype = token ? analyzeGlyph(token.glyph).archetype : null;
   const newTitle = archetype
     ? `<title>Sonoglyph #${tokenId} — ${archetype}</title>`

@@ -46,6 +46,7 @@ import {
   releaseMintSlot,
 } from './mintRateLimit.js';
 import { getOrRenderOgPng, renderAtlasHtml } from './og.js';
+import { getOrRenderVideo, videoExistsOnDisk } from './video.js';
 
 const PORT = Number(process.env.PROXY_PORT ?? 8787);
 const PUBLIC_BASE_URL =
@@ -337,11 +338,35 @@ app.get('/atlas/:id{[0-9]+}', async (c) => {
   const origin = PUBLIC_BASE_URL.replace(/\/+$/, '');
   const token = await lookupToken(id);
   try {
+    // Only advertise og:video if the MP4 is actually on disk. First-share
+    // crawler will see image-only meta; a background render kicked off
+    // below warms the cache so subsequent crawler hits include video.
+    const videoReady = await videoExistsOnDisk(id);
     const html = await renderAtlasHtml(
       origin,
       id,
       token ? { tokenId: token.tokenId, glyph: token.glyph } : null,
+      videoReady,
     );
+
+    // Fire-and-forget MP4 prerender for the natural "user opens /atlas/:id
+    // before clicking Share" flow. By the time they go to share, the MP4
+    // is on disk and the crawler hit is sub-second instead of waiting on
+    // ffmpeg. We swallow errors here — they show up in the dedicated
+    // /video/:id.mp4 handler with proper status codes when something
+    // actually requests the bytes. Skipped when audioCid is missing
+    // (older tokens minted before audio pinning was wired up).
+    if (token && token.audioCid && !videoReady) {
+      void getOrRenderVideo({
+        tokenId: token.tokenId,
+        glyph: token.glyph,
+        audioCid: token.audioCid,
+      }).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[video] prerender for #${id} failed: ${msg.slice(0, 200)}`);
+      });
+    }
+
     // Short cache: 60 s lets a sudden burst of shares hit the same HTML
     // without re-stating index.html, but still picks up redeploys fast.
     c.header('Cache-Control', 'public, max-age=60');
@@ -383,6 +408,57 @@ app.get('/og/:filename', async (c) => {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(`[og/:id] render failed for #${id}: ${msg}`);
     return c.text(`og render failed: ${msg}`, 500);
+  }
+});
+
+/**
+ * MP4 card for the same /og/:id.png semantic key — pairs the static OG
+ * image with the descent's pinned audio so the crawler (Facebook /
+ * Discord / Telegram) can preview audio inline. The same URL also acts
+ * as the "download to attach to a tweet" path, because Twitter's player
+ * card pipeline gates inline video behind a per-domain approval we don't
+ * have. Disk-cached just like the PNG; the first hit costs an ffmpeg run
+ * (~3-8 s) and subsequent hits stream from disk.
+ *
+ * Same path-shape workaround as /og/:filename: Hono's router can't carry
+ * a literal `.mp4` after a regex-constrained param, so we accept any
+ * single segment and validate `<digits>.mp4` inside parseVideoId.
+ */
+function parseVideoId(raw: string): number | null {
+  const m = raw.match(/^(\d+)\.mp4$/);
+  if (!m) return null;
+  const id = Number.parseInt(m[1], 10);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+app.get('/video/:filename', async (c) => {
+  const id = parseVideoId(c.req.param('filename'));
+  if (!id) return c.text('not found', 404);
+  const token = await lookupToken(id);
+  if (!token) return c.text('token not found', 404);
+  if (!token.audioCid) {
+    return c.text('token has no pinned audio', 404);
+  }
+  try {
+    const mp4 = await getOrRenderVideo({
+      tokenId: id,
+      glyph: token.glyph,
+      audioCid: token.audioCid,
+    });
+    c.header('Content-Type', 'video/mp4');
+    c.header('Cache-Control', 'public, max-age=86400, immutable');
+    // Suggest a filename so the "Download Video" button on Atlas yields
+    // sonoglyph-<id>.mp4 instead of "video.mp4" when the user attaches
+    // it to a tweet.
+    c.header(
+      'Content-Disposition',
+      `inline; filename="sonoglyph-${id}.mp4"`,
+    );
+    return c.body(mp4 as unknown as ArrayBuffer);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[video/:id] render failed for #${id}: ${msg.slice(0, 300)}`);
+    return c.text(`video render failed: ${msg.slice(0, 300)}`, 500);
   }
 });
 

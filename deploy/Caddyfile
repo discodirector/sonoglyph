@@ -11,6 +11,8 @@
 #   /collection   → bridge :8787  (full minted-token scan for the atlas page)
 #   /config       → bridge :8787  (feature flags read on Atlas mount)
 #   /og/<id>.png  → bridge :8787  (Twitter/Open Graph card PNG, per token)
+#   /video/<id>.mp4 → bridge :8787 (image+audio MP4 for og:video, also
+#                                  user-downloadable to attach to a tweet)
 #   /atlas/<id>   → bridge :8787  (SPA shell + per-token OG meta injection;
 #                                  /atlas without an id stays SPA-served so
 #                                  the gallery index keeps generic meta)
@@ -86,6 +88,24 @@ sonoglyph.xyz, www.sonoglyph.xyz {
 	@ogPng path_regexp og ^/og/[0-9]+\.png$
 	handle @ogPng {
 		reverse_proxy 127.0.0.1:8787
+	}
+
+	# Video card (MP4 = still PNG + descent audio). First request triggers
+	# an ffmpeg encode (~5-8 s), subsequent requests stream from disk.
+	# The bridge sets a 24 h Cache-Control header so Caddy's downstream
+	# clients (mostly social-media crawlers) hold the file long enough
+	# for typical retweet bursts.
+	@ogMp4 path_regexp ogmp4 ^/video/[0-9]+\.mp4$
+	handle @ogMp4 {
+		# Bump the upstream read timeout in case a crawler hits the very
+		# first /video/:id.mp4 cold — Caddy's default 30 s reverse_proxy
+		# read timeout is enough today but we keep the elasticity here
+		# for the moment we move to 4K cards or longer audio.
+		reverse_proxy 127.0.0.1:8787 {
+			transport http {
+				read_timeout 60s
+			}
+		}
 	}
 
 	# Per-token atlas pages with injected OG meta. Important: this matches

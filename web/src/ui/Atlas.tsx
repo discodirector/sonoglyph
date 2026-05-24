@@ -726,11 +726,19 @@ function DetailModal({
         )}
 
         {shareEnabled && (
-          <div style={{ marginTop: 14 }}>
+          <div
+            style={{
+              marginTop: 14,
+              display: 'flex',
+              gap: 10,
+              flexWrap: 'wrap',
+            }}
+          >
             <ShareOnX
               tokenId={token.tokenId}
               archetype={a.archetype}
             />
+            <DownloadVideo tokenId={token.tokenId} />
           </div>
         )}
 
@@ -970,10 +978,11 @@ function ShareOnX({
       type="button"
       onClick={onClick}
       style={{
-        width: '100%',
+        flex: 1,
+        minWidth: 180,
         padding: '12px 16px',
-        background: 'transparent',
-        color: '#c9885b',
+        background: '#c9885b',
+        color: '#050507',
         border: '1px solid #c9885b',
         fontFamily: 'ui-monospace, Menlo, monospace',
         fontSize: 11,
@@ -985,16 +994,111 @@ function ShareOnX({
         gap: 10,
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = '#c9885b';
-        e.currentTarget.style.color = '#050507';
+        e.currentTarget.style.background = '#d99b6e';
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = 'transparent';
-        e.currentTarget.style.color = '#c9885b';
+        e.currentTarget.style.background = '#c9885b';
       }}
     >
       SHARE ON X
       <span style={{ fontSize: 12, letterSpacing: 0 }}>↗</span>
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Download Video — companion button to Share-on-X. Twitter's "card with
+// video" pipeline requires a per-domain approval we don't have, so the
+// only way the audio actually plays inline on X is the user attaching
+// the MP4 to their tweet themselves. This button downloads that file.
+//
+// The bridge renders the MP4 lazily on first hit (~5-8 s). On the second
+// click it streams from disk in milliseconds. We surface progress via the
+// button label so a user who clicks once and waits sees the encode
+// happening rather than thinking the button is dead.
+//
+// We do NOT try the Web Share API even though `navigator.share({files})`
+// would be a one-click path on mobile — desktop support is too patchy
+// (notably absent on Chrome/Firefox), and a "this might or might not
+// work" CTA is worse than two predictable buttons.
+// ---------------------------------------------------------------------------
+function DownloadVideo({ tokenId }: { tokenId: number }) {
+  const [status, setStatus] = useState<'idle' | 'fetching' | 'error'>('idle');
+
+  const onClick = async () => {
+    if (status === 'fetching') return;
+    setStatus('fetching');
+    try {
+      const res = await fetch(`/video/${tokenId}.mp4`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      // Construct a download via a transient <a download> — this is the
+      // most reliable cross-browser save path and respects the bridge's
+      // Content-Disposition filename when present.
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objUrl;
+      a.download = `sonoglyph-${tokenId}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Revoke after a tick so the click handler has a chance to start
+      // the download stream before we invalidate the URL.
+      setTimeout(() => URL.revokeObjectURL(objUrl), 1000);
+      setStatus('idle');
+    } catch (err) {
+      console.warn('[atlas] video download failed:', err);
+      setStatus('error');
+      // Auto-reset after a moment so the user can retry without
+      // reopening the modal.
+      setTimeout(() => setStatus('idle'), 4000);
+    }
+  };
+
+  const label =
+    status === 'fetching'
+      ? 'RENDERING…'
+      : status === 'error'
+      ? 'FAILED — RETRY'
+      : 'DOWNLOAD VIDEO';
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={status === 'fetching'}
+      style={{
+        flex: 1,
+        minWidth: 180,
+        padding: '12px 16px',
+        background: 'transparent',
+        color: status === 'error' ? '#c97a5b' : '#c9885b',
+        border: `1px solid ${status === 'error' ? '#c97a5b' : '#c9885b'}`,
+        fontFamily: 'ui-monospace, Menlo, monospace',
+        fontSize: 11,
+        letterSpacing: '0.28em',
+        cursor: status === 'fetching' ? 'wait' : 'pointer',
+        opacity: status === 'fetching' ? 0.7 : 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+      }}
+      onMouseEnter={(e) => {
+        if (status === 'idle') {
+          e.currentTarget.style.background = 'rgba(201,136,91,0.1)';
+        }
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'transparent';
+      }}
+    >
+      {label}
+      {status === 'idle' && (
+        <span style={{ fontSize: 12, letterSpacing: 0 }}>↓</span>
+      )}
     </button>
   );
 }

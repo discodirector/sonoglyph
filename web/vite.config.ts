@@ -45,6 +45,13 @@ export default defineConfig({
         target: 'http://localhost:8787',
         changeOrigin: true,
       },
+      // Per-token MP4 (PNG + audio). Used by the "Download Video" button
+      // for manual upload to X / Bluesky, and by og:video crawlers like
+      // Discord/Telegram for inline preview playback.
+      '/video': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+      },
       // Frontend feature flags (share button gate, etc).
       '/config': {
         target: 'http://localhost:8787',
