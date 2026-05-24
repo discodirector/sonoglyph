@@ -53,9 +53,11 @@ import { getOrRenderOgPng, type AtlasTokenMeta } from './og.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR =
   process.env.OG_CACHE_DIR ?? path.resolve(HERE, '../../cache/og');
-// Same version key as og.ts so a calibration freeze invalidates both PNGs
-// and MP4s in one bump.
-const CACHE_VERSION = process.env.OG_CACHE_VERSION ?? 'v1';
+// Same version key as og.ts so a calibration freeze (or layout change)
+// invalidates both PNGs and MP4s in one bump. Keep this in lockstep with
+// the constant in og.ts — different defaults would mean PNGs render under
+// v2 while MP4s try to read v2 from disk but the underlying PNG is v1.
+const CACHE_VERSION = process.env.OG_CACHE_VERSION ?? 'v2';
 // Pinata gateway is where the bridge pins audio at mint; using it here
 // matches the URL the contract recorded in audioCid. Fallback to a public
 // gateway via OG_AUDIO_GATEWAY for ops experimentation.

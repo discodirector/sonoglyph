@@ -259,15 +259,20 @@ export async function renderAtlasHtml(
 // Layout (1200×630):
 //
 //   ┌────────────────────────────────────────────────────────────┐
-//   │  SONOGLYPH #123                                            │  ← top-left
-//   │                                                            │
+//   │  SONOGLYPH #123                                            │  ← top stack:
+//   │  CONSTELLATION                                             │     id + archetype
 //   │                                                            │
 //   │           [ ASCII GLYPH CENTERED, BRAND COLOR ]            │
 //   │                                                            │
 //   │                                                            │
-//   │  CONSTELLATION                              sonoglyph.xyz  │  ← bottom row
-//   │  sparse · drift · centered · rich · mirrored               │
+//   │                                              sonoglyph.xyz │  ← bottom-right
 //   └────────────────────────────────────────────────────────────┘
+//
+// Earlier the archetype label and the five-axis trait line lived in the
+// bottom-left. Trait line collided with the audio playback bar Twitter
+// stamps over the lower edge of video previews, and putting the archetype
+// up next to the token id reads more like a title — which is what a
+// social card wants. Empty bottom-left is intentional negative space.
 // ---------------------------------------------------------------------------
 
 const COLORS = {
@@ -298,14 +303,6 @@ export async function renderOgPng(input: AtlasTokenMeta): Promise<Buffer> {
   const a = analyzeGlyph(input.glyph);
   const font = await loadFont();
 
-  const traitLine = [
-    a.traits.density,
-    a.traits.form,
-    a.traits.anchor,
-    a.traits.lexicon,
-    a.traits.symmetry,
-  ].join('  ·  ');
-
   const root: SatoriNode = el(
     'div',
     {
@@ -320,15 +317,36 @@ export async function renderOgPng(input: AtlasTokenMeta): Promise<Buffer> {
       justifyContent: 'space-between',
     },
     [
-      // Top row
+      // Top stack: id (small/muted) + archetype (large/brand). Both
+      // left-aligned so the archetype reads as the page-title equivalent
+      // for the card.
       el(
         'div',
         {
-          fontSize: 18,
-          letterSpacing: '6px',
-          color: COLORS.muted,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '14px',
         },
-        `SONOGLYPH #${input.tokenId}`,
+        [
+          el(
+            'div',
+            {
+              fontSize: 18,
+              letterSpacing: '6px',
+              color: COLORS.muted,
+            },
+            `SONOGLYPH #${input.tokenId}`,
+          ),
+          el(
+            'div',
+            {
+              fontSize: 42,
+              letterSpacing: '7px',
+              color: COLORS.brand,
+            },
+            a.archetype.toUpperCase(),
+          ),
+        ],
       ),
 
       // Center glyph
@@ -357,54 +375,26 @@ export async function renderOgPng(input: AtlasTokenMeta): Promise<Buffer> {
         ),
       ),
 
-      // Bottom row: archetype + traits + URL
+      // Bottom row: URL pinned right, left intentionally empty so the
+      // glyph has visual breathing room above and the eye lands on the
+      // top-stack title block first.
       el(
         'div',
         {
           display: 'flex',
           flexDirection: 'row',
-          justifyContent: 'space-between',
+          justifyContent: 'flex-end',
           alignItems: 'flex-end',
         },
-        [
-          el(
-            'div',
-            {
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '8px',
-            },
-            [
-              el(
-                'div',
-                {
-                  fontSize: 38,
-                  letterSpacing: '6px',
-                  color: COLORS.brand,
-                },
-                a.archetype.toUpperCase(),
-              ),
-              el(
-                'div',
-                {
-                  fontSize: 16,
-                  letterSpacing: '2px',
-                  color: COLORS.muted,
-                },
-                traitLine,
-              ),
-            ],
-          ),
-          el(
-            'div',
-            {
-              fontSize: 16,
-              letterSpacing: '4px',
-              color: COLORS.faint,
-            },
-            'SONOGLYPH.XYZ',
-          ),
-        ],
+        el(
+          'div',
+          {
+            fontSize: 16,
+            letterSpacing: '4px',
+            color: COLORS.faint,
+          },
+          'SONOGLYPH.XYZ',
+        ),
       ),
     ],
   );
@@ -444,7 +434,12 @@ export async function renderOgPng(input: AtlasTokenMeta): Promise<Buffer> {
 // in env when that happens; mismatched files in the cache dir are ignored.
 // ---------------------------------------------------------------------------
 
-const CACHE_VERSION = process.env.OG_CACHE_VERSION ?? 'v1';
+// Bump when the renderer layout changes. v2 = archetype moved from the
+// bottom-left into the top title stack, trait line removed (collided with
+// Twitter's video playback bar). Old v1-*.png/.mp4 files become stale and
+// are ignored — they sit on disk until the next manual cleanup, which is
+// fine given the small token count.
+const CACHE_VERSION = process.env.OG_CACHE_VERSION ?? 'v2';
 
 function cachePath(tokenId: number): string {
   return path.join(CACHE_DIR, `${CACHE_VERSION}-${tokenId}.png`);
