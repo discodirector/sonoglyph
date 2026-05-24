@@ -22,7 +22,7 @@
  * session for a passive visitor would waste a bridge slot.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchCollection,
   type CollectionToken,
@@ -36,6 +36,19 @@ import {
 } from '../lib/glyphRarity';
 
 type SortMode = 'rarity' | 'token' | 'recent';
+
+/**
+ * Parse the current pathname to see if we're deep-linked to a token. Returns
+ * null for /atlas (no id) or any non-/atlas path. We do this rather than
+ * react-router because the rest of the app uses a single pathname check —
+ * adding a router for one optional path segment is heavier than necessary.
+ */
+function tokenIdFromPath(path: string): number | null {
+  const m = path.match(/^\/atlas\/(\d+)(?:\/.*)?$/);
+  if (!m) return null;
+  const id = Number.parseInt(m[1], 10);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
 
 const ARCHETYPE_ORDER: Archetype[] = [
   'Totem',
@@ -54,7 +67,13 @@ export function Atlas() {
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Archetype | 'all'>('all');
   const [sort, setSort] = useState<SortMode>('rarity');
-  const [openId, setOpenId] = useState<number | null>(null);
+  // openId is the source of truth for "is the modal open and for which
+  // token". We initialise it from the URL so deep-links like /atlas/42 open
+  // straight into the modal — that's also what Twitter cards rely on once
+  // we add OG meta in step 2.
+  const [openId, setOpenId] = useState<number | null>(() =>
+    typeof window === 'undefined' ? null : tokenIdFromPath(window.location.pathname),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -75,6 +94,30 @@ export function Atlas() {
       cancelled = true;
     };
   }, []);
+
+  // Keep URL ⇔ openId in sync. Browser back/forward fires popstate; we
+  // re-read the pathname rather than tracking history state, so a manually
+  // typed /atlas/N also resolves correctly.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onPop = () => setOpenId(tokenIdFromPath(window.location.pathname));
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  const openToken = (id: number) => {
+    setOpenId(id);
+    if (typeof window !== 'undefined' && window.location.pathname !== `/atlas/${id}`) {
+      window.history.pushState({}, '', `/atlas/${id}`);
+    }
+  };
+
+  const closeModal = () => {
+    setOpenId(null);
+    if (typeof window !== 'undefined' && window.location.pathname !== '/atlas') {
+      window.history.pushState({}, '', '/atlas');
+    }
+  };
 
   // Rank the full collection once (memoised on tokens), then apply
   // filter+sort in a separate pass. Doing it in one step would re-rank on
@@ -206,17 +249,20 @@ export function Atlas() {
           />
           <Grid
             items={visible}
-            onOpen={(id) => setOpenId(id)}
+            onOpen={openToken}
           />
         </>
       )}
 
       {openId != null && metaByToken.has(openId) && (
         <DetailModal
+          /* key forces a fresh mount per token — that resets the audio
+             player state without us having to manually clear refs. */
+          key={openId}
           token={metaByToken.get(openId)!}
           analysis={ranked.find((r) => r.tokenId === openId) ?? null}
           totalCount={ranked.length}
-          onClose={() => setOpenId(null)}
+          onClose={closeModal}
         />
       )}
     </div>
@@ -654,9 +700,15 @@ function DetailModal({
 
         <TraitGrid analysis={a} />
 
+        {token.audioCid && (
+          <div style={{ marginTop: 22 }}>
+            <AudioPlayer cid={token.audioCid} />
+          </div>
+        )}
+
         <div
           style={{
-            marginTop: 22,
+            marginTop: 18,
             fontSize: 10,
             letterSpacing: '0.18em',
             color: '#6a6660',
@@ -672,13 +724,169 @@ function DetailModal({
               href={`https://gateway.pinata.cloud/ipfs/${token.audioCid}`}
               target="_blank"
               rel="noreferrer"
-              style={{ color: '#c9885b', textDecoration: 'none' }}
+              style={{ color: '#6a6660', textDecoration: 'none' }}
             >
-              AUDIO ↗
+              IPFS ↗
             </a>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Inline audio player — one ASCII button + elapsed/total readout.
+//
+// Why a hand-rolled player vs <audio controls>:
+// - The default browser UI is huge and themed with system colors; on dark
+//   monospace pages it looks like a fish in a tuxedo.
+// - We just need play/pause + progress. No volume slider, no download menu,
+//   no playback rate dropdown. Streaming a 60-second .webm is fast enough
+//   over the Pinata gateway that we don't need fancy buffering UI either.
+//
+// Singleton-ness is handled at the call site by keying DetailModal on
+// openId: when the user opens a different token's modal, this whole subtree
+// unmounts and the new one mounts fresh. That naturally stops the audio.
+//
+// IPFS gateway choice: we use gateway.pinata.cloud because we pinned via
+// Pinata at mint time, so their gateway is guaranteed to have the file
+// cached. Falling back to a public gateway (ipfs.io / w3s.link) would also
+// work but adds a slow path on first hit.
+// ---------------------------------------------------------------------------
+function AudioPlayer({ cid }: { cid: string }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [error, setError] = useState(false);
+
+  const url = `https://gateway.pinata.cloud/ipfs/${cid}`;
+
+  // Wire the <audio> element's events into state. The element itself lives
+  // in JSX below; this effect attaches once and tears down on unmount.
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    const onPlay = () => setPlaying(true);
+    const onPause = () => setPlaying(false);
+    const onEnded = () => {
+      setPlaying(false);
+      // Seek back to start so the next ▶ click plays from 0 rather than
+      // sitting at the end.
+      el.currentTime = 0;
+      setCurrentTime(0);
+    };
+    const onTime = () => setCurrentTime(el.currentTime);
+    const onMeta = () => setDuration(el.duration || 0);
+    const onError = () => setError(true);
+    el.addEventListener('play', onPlay);
+    el.addEventListener('pause', onPause);
+    el.addEventListener('ended', onEnded);
+    el.addEventListener('timeupdate', onTime);
+    el.addEventListener('loadedmetadata', onMeta);
+    el.addEventListener('error', onError);
+    return () => {
+      el.removeEventListener('play', onPlay);
+      el.removeEventListener('pause', onPause);
+      el.removeEventListener('ended', onEnded);
+      el.removeEventListener('timeupdate', onTime);
+      el.removeEventListener('loadedmetadata', onMeta);
+      el.removeEventListener('error', onError);
+      // Explicitly pause on unmount so a player closing during playback
+      // doesn't leak an autoplaying ghost into the next modal mount.
+      el.pause();
+    };
+  }, []);
+
+  const toggle = () => {
+    const el = audioRef.current;
+    if (!el) return;
+    if (el.paused) {
+      void el.play().catch(() => setError(true));
+    } else {
+      el.pause();
+    }
+  };
+
+  const fmt = (s: number) => {
+    if (!Number.isFinite(s) || s < 0) return '0:00';
+    const m = Math.floor(s / 60);
+    const r = Math.floor(s % 60);
+    return `${m}:${r.toString().padStart(2, '0')}`;
+  };
+
+  const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '10px 12px',
+        border: '1px solid #2a2a2e',
+        background: 'rgba(255,255,255,0.02)',
+      }}
+    >
+      <button
+        type="button"
+        onClick={toggle}
+        disabled={error}
+        aria-label={playing ? 'Pause' : 'Play'}
+        style={{
+          width: 32,
+          height: 32,
+          flexShrink: 0,
+          border: '1px solid #c9885b',
+          background: playing ? '#c9885b' : 'transparent',
+          color: playing ? '#050507' : '#c9885b',
+          fontFamily: 'inherit',
+          fontSize: 12,
+          cursor: error ? 'not-allowed' : 'pointer',
+          opacity: error ? 0.4 : 1,
+          padding: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {playing ? '∥' : '▶'}
+      </button>
+      <div
+        style={{
+          flex: 1,
+          height: 2,
+          background: '#1a1a1d',
+          position: 'relative',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: `${pct}%`,
+            background: '#c9885b',
+            transition: 'width 0.12s linear',
+          }}
+        />
+      </div>
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: '0.15em',
+          color: error ? '#c97a5b' : '#a09d99',
+          fontVariantNumeric: 'tabular-nums',
+          minWidth: 78,
+          textAlign: 'right',
+        }}
+      >
+        {error ? 'AUDIO UNAVAILABLE' : `${fmt(currentTime)} / ${fmt(duration)}`}
+      </div>
+      {/* preload=metadata lets us show the duration immediately without
+          paying for full audio download until the user clicks play. */}
+      <audio ref={audioRef} src={url} preload="metadata" />
     </div>
   );
 }

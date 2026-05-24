@@ -667,6 +667,10 @@ interface EthereumProvider {
 function RarityBadge({ glyph }: { glyph: string }) {
   const analysis: GlyphAnalysis = useMemo(() => analyzeGlyph(glyph), [glyph]);
   const [rank, setRank] = useState<{ rank: number; total: number } | null>(null);
+  // Once the on-chain mint resolves we know our token id and can deep-link
+  // the atlas straight to the player's freshly-minted card. Before mint the
+  // id is null and we fall back to /atlas (the gallery index).
+  const mintTokenId = useSession((s) => s.mintTokenId);
 
   useEffect(() => {
     let cancelled = false;
@@ -750,7 +754,7 @@ function RarityBadge({ glyph }: { glyph: string }) {
       </div>
 
       <a
-        href="/atlas"
+        href={mintTokenId ? `/atlas/${mintTokenId}` : '/atlas'}
         style={{
           fontSize: 9,
           letterSpacing: '0.3em',
@@ -759,7 +763,7 @@ function RarityBadge({ glyph }: { glyph: string }) {
           marginTop: 4,
         }}
       >
-        SEE THE ATLAS →
+        {mintTokenId ? 'SEE IT IN THE ATLAS →' : 'SEE THE ATLAS →'}
       </a>
     </div>
   );
