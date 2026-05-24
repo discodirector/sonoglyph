@@ -1,7 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { isAddress } from 'viem';
 import { useSession } from '../state/useSession';
-import { mintDescent, fetchSupply } from '../net/client';
+import { mintDescent, fetchSupply, fetchCollection } from '../net/client';
+import {
+  ARCHETYPE_DESCRIPTIONS,
+  analyzeGlyph,
+  rankCollection,
+  type GlyphAnalysis,
+} from '../lib/glyphRarity';
+import { TraitGrid } from './Atlas';
 
 /**
  * Finale screen — shown after the final layer (MAX_LAYERS).
@@ -130,6 +137,14 @@ export function Finale() {
               ? 'TRANSCRIBED BY KIMI'
               : 'OFFLINE TRANSCRIPT'}
           </div>
+
+          {/* Rarity badge — the same five-axis analysis the atlas page uses.
+              Shown the moment Kimi's artifact is in, well before the player
+              decides whether to mint. Score + archetype + traits are derived
+              from a frozen calibration snapshot, so they appear instantly;
+              the cross-corpus rank requires loading every minted token and
+              fades in once that fetch resolves. */}
+          <RarityBadge glyph={artifact.glyph} />
         </>
       )}
 
@@ -627,4 +642,125 @@ function MintSuccess({
  */
 interface EthereumProvider {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+}
+
+// -----------------------------------------------------------------------------
+// RarityBadge — five-axis analysis of the just-finalised glyph, displayed
+// alongside the journal so the player can read what kind of descent they
+// produced before deciding to mint.
+//
+// Two-stage render:
+//   1. Synchronous, on mount: archetype + per-axis bucket labels + per-axis
+//      percent of the calibration corpus. These come from the frozen
+//      snapshot inside web/src/lib/glyphRarity.ts — no network round-trip.
+//   2. Asynchronous: rank within the whole minted collection. We hit
+//      /collection (which the bridge caches for 5 min), run rankCollection
+//      including the freshly minted glyph as an extra entry, and surface
+//      "RANK X / N+1". The freshly-minted glyph isn't on-chain yet when
+//      this view first renders (we're pre-mint), so we splice in a
+//      synthetic id=0 to keep the comparison fair.
+//
+// Failure of step 2 is non-fatal: we just hide the rank line. The player
+// still sees archetype + traits.
+// -----------------------------------------------------------------------------
+
+function RarityBadge({ glyph }: { glyph: string }) {
+  const analysis: GlyphAnalysis = useMemo(() => analyzeGlyph(glyph), [glyph]);
+  const [rank, setRank] = useState<{ rank: number; total: number } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchCollection()
+      .then((res) => {
+        if (cancelled) return;
+        // Include the current (possibly unminted) glyph as a synthetic
+        // entry. tokenId=0 sorts last among ties — irrelevant in practice
+        // since rarityScore is the primary key. We tag it `current=true`
+        // so we can pluck it back out and read its rank.
+        const withCurrent = [
+          ...res.tokens.map((t) => ({ tokenId: t.tokenId, glyph: t.glyph })),
+          { tokenId: 0, glyph },
+        ];
+        const ranked = rankCollection(withCurrent);
+        const me = ranked.find((r) => r.tokenId === 0);
+        if (me) {
+          setRank({ rank: me.rarityRank, total: ranked.length });
+        }
+      })
+      .catch(() => {
+        /* hide silently — archetype/traits remain visible */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [glyph]);
+
+  return (
+    <div
+      style={{
+        marginTop: 6,
+        maxWidth: 620,
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 12,
+        padding: '18px 20px',
+        background: 'rgba(255,255,255,0.025)',
+        border: '1px solid #1a1a1d',
+        fontFamily: 'ui-monospace, Menlo, monospace',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 14,
+          flexWrap: 'wrap',
+          justifyContent: 'center',
+        }}
+      >
+        <div style={{ fontSize: 18, letterSpacing: '0.18em', color: '#c9885b' }}>
+          {analysis.archetype.toUpperCase()}
+        </div>
+        {rank && (
+          <div style={{ fontSize: 10, letterSpacing: '0.22em', color: '#6a6660' }}>
+            RANK {rank.rank} / {rank.total}
+          </div>
+        )}
+      </div>
+
+      <p
+        style={{
+          margin: 0,
+          fontSize: 11,
+          lineHeight: 1.6,
+          color: '#a09d99',
+          textAlign: 'center',
+          fontFamily: 'system-ui, sans-serif',
+          fontStyle: 'italic',
+          maxWidth: 540,
+        }}
+      >
+        {ARCHETYPE_DESCRIPTIONS[analysis.archetype]}
+      </p>
+
+      <div style={{ width: '100%' }}>
+        <TraitGrid analysis={analysis} />
+      </div>
+
+      <a
+        href="/atlas"
+        style={{
+          fontSize: 9,
+          letterSpacing: '0.3em',
+          color: '#6a6660',
+          textDecoration: 'none',
+          marginTop: 4,
+        }}
+      >
+        SEE THE ATLAS →
+      </a>
+    </div>
+  );
 }

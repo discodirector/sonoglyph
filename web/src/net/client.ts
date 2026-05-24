@@ -178,6 +178,51 @@ export async function fetchSupply(): Promise<SupplyInfo> {
 }
 
 // ---------------------------------------------------------------------------
+// Full collection fetch — backs the /atlas page. The bridge scans every
+// minted descent off chain and caches the result for 5 minutes, so the
+// first viewer after a TTL expiry pays ~30 s of latency and everyone in
+// that window gets the cached blob instantly.
+//
+// The journal isn't included to keep payload size sane (~150 KB for 250
+// tokens with glyph+meta only, vs ~600 KB if we shipped journals too).
+// The atlas page only renders glyph thumbnails + traits + rank; journal
+// is a per-token follow-up if we ever build a detail view.
+// ---------------------------------------------------------------------------
+
+export interface CollectionToken {
+  tokenId: number;
+  glyph: string;
+  sessionCode: string;
+  creator: string;
+  /** Unix seconds — from the contract's `mintedAt` (uint64). */
+  mintedAt: number;
+  audioCid: string;
+}
+
+export interface CollectionResponse {
+  tokens: CollectionToken[];
+  count: number;
+  cached: boolean;
+}
+
+export async function fetchCollection(): Promise<CollectionResponse> {
+  const res = await fetch('/collection');
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const j = (await res.json()) as { error?: string };
+      detail = j?.error ?? '';
+    } catch {
+      /* ignore */
+    }
+    throw new Error(
+      `collection fetch failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`,
+    );
+  }
+  return (await res.json()) as CollectionResponse;
+}
+
+// ---------------------------------------------------------------------------
 // Shared-agent spawn — for players who don't have their own Hermes install.
 // Posts to the bridge, which forks an ephemeral hermes-CLI on the VPS,
 // paired to the same `?code=` as this WS session. Subsequent state

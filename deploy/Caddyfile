@@ -3,15 +3,16 @@
 # Caddy auto-obtains and renews TLS for any domain it serves over HTTPS.
 #
 # Layout:
-#   /ws*    → bridge :8787  (WebSocket)
-#   /mcp*   → bridge :8787  (Streamable HTTP MCP, no buffering)
-#   /pin*   → bridge :8787  (IPFS pinning POST endpoints)
-#   /mint   → bridge :8787  (sign + broadcast Sonoglyph.mintDescent)
-#   /supply → bridge :8787  (cached lastTokenId / MAX_SUPPLY for Finale UI)
-#   /agents → bridge :8787  (POST /agents/spawn — spawn ephemeral Hermes
-#                            for players without their own)
-#   /health → bridge :8787
-#   else    → static frontend
+#   /ws*        → bridge :8787  (WebSocket)
+#   /mcp*       → bridge :8787  (Streamable HTTP MCP, no buffering)
+#   /pin*       → bridge :8787  (IPFS pinning POST endpoints)
+#   /mint       → bridge :8787  (sign + broadcast Sonoglyph.mintDescent)
+#   /supply     → bridge :8787  (cached lastTokenId / MAX_SUPPLY for Finale UI)
+#   /collection → bridge :8787  (full minted-token scan for the atlas page)
+#   /agents     → bridge :8787  (POST /agents/spawn — spawn ephemeral Hermes
+#                                for players without their own)
+#   /health     → bridge :8787
+#   else        → static frontend (SPA fallback handles /atlas etc.)
 #
 # `handle` accepts a single matcher token, so we use named matchers for
 # the path lists. Without `handle`, Caddy's default directive ordering
@@ -58,6 +59,15 @@ sonoglyph.xyz, www.sonoglyph.xyz {
 	}
 
 	handle /supply {
+		reverse_proxy 127.0.0.1:8787
+	}
+
+	handle /collection {
+		# Full chain scan (~30 s cold-start) — the bridge caches the result
+		# for 5 minutes, but the first hit after a TTL expiry still takes
+		# the long path. Caddy's default reverse_proxy timeout is plenty
+		# for that, but if Hetzner ever puts an idle-timeout proxy in
+		# front of us we'd want flush_interval -1 here too.
 		reverse_proxy 127.0.0.1:8787
 	}
 

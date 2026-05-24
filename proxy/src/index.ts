@@ -28,7 +28,13 @@ import { GameRegistry } from './registry.js';
 import { handleMcpRequest, disposeMcpForSession } from './mcp.js';
 import { generateFinalArtifact } from './kimi.js';
 import { pinFileToPinata } from './storage.js';
-import { chainConfigStatus, mintSonoglyph, getSupplyInfo } from './chain.js';
+import {
+  chainConfigStatus,
+  mintSonoglyph,
+  getSupplyInfo,
+  fetchAllDescents,
+  type DescentSummary,
+} from './chain.js';
 import { isAddress } from 'viem';
 import type { ClientMessage, ServerMessage } from './protocol.js';
 import { AgentPool } from './agents/pool.js';
@@ -189,6 +195,70 @@ app.get('/supply', async (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn('[supply] read failed:', message);
+    return c.json({ error: message }, 503);
+  }
+});
+
+// -----------------------------------------------------------------------------
+// Collection snapshot — backs the /atlas frontend route. Returns every
+// minted descent as a flat array (tokenId, glyph, sessionCode, creator,
+// mintedAt, audioCid). The frontend derives rarity + archetype + rank
+// locally with web/src/lib/glyphRarity.ts; we keep the bridge thin and
+// dumb about traits.
+//
+// Cache window: 5 minutes. Rationale:
+//   - A full scan of 250 tokens takes ~30 s on the public Monad RPC.
+//     Serving every atlas mount from the chain would melt both the RPC
+//     and the player's loading state.
+//   - Mints arrive irregularly (~minutes apart at peak, hours at quiet
+//     times), so a 5-minute staleness window is unobservable to anyone
+//     but the player who just minted — and they see their own glyph in
+//     the Finale UI immediately, not via /collection.
+//   - When a fresh mint completes, we proactively invalidate the cache
+//     in the /mint handler so the next /collection hit re-scans. This
+//     keeps the atlas reasonably live without compromising the cache.
+//
+// Failure mode: if the chain is unreachable, returns 503 with the error.
+// The atlas page treats that as "collection unavailable" and shows a
+// brief message + retry button.
+// -----------------------------------------------------------------------------
+let collectionCache:
+  | { value: DescentSummary[]; expiresAt: number }
+  | null = null;
+const COLLECTION_CACHE_TTL_MS = 5 * 60_000;
+
+// Concurrent-fetch guard: while one /collection request is mid-scan we
+// share its promise with any others that land in the window. Without this
+// guard a cold-start surge of N atlas mounts triggers N parallel 30-second
+// chain scans, hammering the RPC and saturating the bridge.
+let inflightCollection: Promise<DescentSummary[]> | null = null;
+
+app.get('/collection', async (c) => {
+  const now = Date.now();
+  if (collectionCache && collectionCache.expiresAt > now) {
+    return c.json({
+      tokens: collectionCache.value,
+      count: collectionCache.value.length,
+      cached: true,
+    });
+  }
+  try {
+    if (!inflightCollection) {
+      inflightCollection = (async () => {
+        try {
+          const value = await fetchAllDescents();
+          collectionCache = { value, expiresAt: Date.now() + COLLECTION_CACHE_TTL_MS };
+          return value;
+        } finally {
+          inflightCollection = null;
+        }
+      })();
+    }
+    const value = await inflightCollection;
+    return c.json({ tokens: value, count: value.length, cached: false });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn('[collection] scan failed:', message);
     return c.json({ error: message }, 503);
   }
 });
@@ -419,6 +489,11 @@ app.post('/mint', async (c) => {
       `[mint ${code}] tokenId=${result.tokenId} tx=${result.txHash} ` +
         `block=${result.blockNumber} gas=${result.gasUsed}`,
     );
+    // Invalidate caches that depend on supply state. /supply has its own
+    // 15 s TTL we don't need to clear; /collection's 5-minute window is
+    // long enough that the new mint would be invisible on the atlas page
+    // until expiry. Dropping the entry forces the next viewer to re-scan.
+    collectionCache = null;
     return c.json({
       tokenId: result.tokenId,
       txHash: result.txHash,

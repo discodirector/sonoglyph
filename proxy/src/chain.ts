@@ -71,6 +71,25 @@ export const SONOGLYPH_ABI = [
     outputs: [{name: '', type: 'uint256'}],
   },
   {
+    type: 'function',
+    name: 'descentOf',
+    stateMutability: 'view',
+    inputs: [{name: 'tokenId', type: 'uint256'}],
+    outputs: [
+      {
+        type: 'tuple',
+        components: [
+          {name: 'glyph', type: 'string'},
+          {name: 'journal', type: 'string'},
+          {name: 'audioCid', type: 'string'},
+          {name: 'sessionCode', type: 'string'},
+          {name: 'creator', type: 'address'},
+          {name: 'mintedAt', type: 'uint64'},
+        ],
+      },
+    ],
+  },
+  {
     type: 'event',
     name: 'DescentMinted',
     inputs: [
@@ -302,6 +321,109 @@ export async function getSupplyInfo(): Promise<{ minted: number; max: number }> 
     minted: Number(minted),
     max: Number(max),
   };
+}
+
+/**
+ * One entry in the full collection — what `/collection` returns per token.
+ *
+ * The journal isn't included even though `descentOf` returns it: the atlas
+ * page renders thumbnails + ranks, and full prose for ~250 tokens would
+ * inflate the payload from ~150 KB to ~600 KB without UI benefit. The
+ * detail modal pulls the full descent via a separate read if needed.
+ */
+export interface DescentSummary {
+  tokenId: number;
+  glyph: string;
+  sessionCode: string;
+  creator: `0x${string}`;
+  mintedAt: number;
+  audioCid: string;
+}
+
+/**
+ * Fetch every minted Sonoglyph from the contract by walking `descentOf` for
+ * tokenIds 1..lastTokenId. Used by the /collection endpoint to feed the
+ * atlas page.
+ *
+ * Why not events: `DescentMinted` carries tokenId + to + sessionCode +
+ * audioCid but NOT the glyph string, so we'd need a per-token read anyway.
+ * One scan call per token is the cheapest path that surfaces the glyph.
+ *
+ * Rate-limit shape (mirrors scripts/recalibrate-rarity.mjs):
+ *   - Batch size 10 in parallel, 150 ms pause between batches.
+ *   - Per-token retry on HTTP 429 with exponential backoff (0.5/1/2/4/8 s).
+ *   - Tokens that still fail after 5 retries are silently dropped from the
+ *     result; we log them so the operator can re-run if too many leak.
+ *
+ * The full scan is slow (~30 s at 250 tokens on the public RPC), which is
+ * why /collection caches aggressively in front of this call.
+ */
+export async function fetchAllDescents(): Promise<DescentSummary[]> {
+  const ctx = loadContext();
+  const lastId = (await ctx.publicClient.readContract({
+    address: ctx.contractAddress,
+    abi: SONOGLYPH_ABI,
+    functionName: 'lastTokenId',
+  })) as bigint;
+  const N = Number(lastId);
+  if (N === 0) return [];
+
+  console.log(`[collection] scanning ${N} tokens…`);
+
+  const fetchOne = async (id: number, attempt = 1): Promise<DescentSummary | null> => {
+    try {
+      const d = (await ctx.publicClient.readContract({
+        address: ctx.contractAddress,
+        abi: SONOGLYPH_ABI,
+        functionName: 'descentOf',
+        args: [BigInt(id)],
+      })) as {
+        glyph: string;
+        journal: string;
+        audioCid: string;
+        sessionCode: string;
+        creator: `0x${string}`;
+        mintedAt: bigint;
+      };
+      return {
+        tokenId: id,
+        glyph: d.glyph,
+        sessionCode: d.sessionCode,
+        creator: d.creator,
+        mintedAt: Number(d.mintedAt),
+        audioCid: d.audioCid,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const is429 = msg.includes('429');
+      if (is429 && attempt < 6) {
+        // 0.5, 1, 2, 4, 8 seconds.
+        const backoff = 500 * 2 ** (attempt - 1);
+        await new Promise((r) => setTimeout(r, backoff));
+        return fetchOne(id, attempt + 1);
+      }
+      console.warn(`[collection] token #${id} failed: ${msg.slice(0, 100)}`);
+      return null;
+    }
+  };
+
+  const out: DescentSummary[] = [];
+  const BATCH = 10;
+  for (let s = 1; s <= N; s += BATCH) {
+    const ids: number[] = [];
+    for (let i = s; i < s + BATCH && i <= N; i++) ids.push(i);
+    const results = await Promise.all(ids.map((id) => fetchOne(id)));
+    for (const r of results) if (r) out.push(r);
+    // Tiny inter-batch pause to stay under the public RPC's per-second
+    // limit even when no individual call hit 429.
+    await new Promise((r) => setTimeout(r, 150));
+  }
+
+  const dropped = N - out.length;
+  if (dropped > 0) {
+    console.warn(`[collection] scan dropped ${dropped}/${N} tokens after retries`);
+  }
+  return out;
 }
 
 /** Used by /health to surface mint-readiness. Doesn't hit the chain. */

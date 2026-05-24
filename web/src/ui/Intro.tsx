@@ -181,6 +181,16 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
             </TabButton>
           </div>
 
+          {/* Secondary entry point to the atlas — kept visible regardless
+              of which tab (if any) is selected, so a fresh visitor and a
+              mid-setup player can both wander into the collection. Sits
+              below the tab row as a muted text link so it never reads
+              as a competing primary CTA against "Begin descent" / "Play
+              without your own agent". The atlas is a separate SPA route
+              served by the same bundle (Caddy try_files fallback), so a
+              plain <a href> works — no router needed. */}
+          <AtlasLink />
+
           {topTab === 'byo' && (
             <ByoPath
               agentConnected={agentConnected}
@@ -1235,6 +1245,39 @@ function CommandBlock({
         </button>
       </div>
     </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Small secondary link to the atlas page. Lives just under the top-level
+// tab row on Intro. Subtle on purpose — the primary action on this screen
+// is "pick a path → begin", and the atlas is an aside ("see what other
+// people made"). Hover bumps it to the orange accent the brand uses for
+// active states so the affordance is felt without weight at rest.
+// -----------------------------------------------------------------------------
+function AtlasLink() {
+  const [hover, setHover] = useState(false);
+  return (
+    <a
+      href="/atlas"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        fontSize: 10,
+        letterSpacing: '0.32em',
+        color: hover ? '#c9885b' : '#6a6660',
+        textDecoration: 'none',
+        textTransform: 'uppercase',
+        marginTop: -8,
+        // Same monospace stack as the rest of the brand's small caps so
+        // the link inherits the chrome's typographic rhythm rather than
+        // catching the eye as foreign text.
+        fontFamily: 'ui-monospace, Menlo, monospace',
+        transition: 'color 160ms ease',
+      }}
+    >
+      See the collection ↗
+    </a>
   );
 }
 

@@ -6,6 +6,7 @@ import { Pads } from './ui/Pads';
 import { Intro } from './ui/Intro';
 import { Onboarding } from './ui/Onboarding';
 import { Finale } from './ui/Finale';
+import { Atlas } from './ui/Atlas';
 import { SharedAgentOverlay } from './ui/SharedAgentOverlay';
 import { LAYER_TYPES, useSession } from './state/useSession';
 import {
@@ -30,7 +31,36 @@ import { openBridge, pinAudio, type BridgeConnection } from './net/client';
  * - On Begin: init audio (requires user gesture), tell server `hello` to
  *   start the descent.
  */
+/**
+ * Top-level route shim. We don't pull in react-router for one alternate
+ * page — the SPA fallback in Caddy (`try_files {path} /index.html`) means
+ * any non-API path arrives here, and the Atlas page is a pure read-only
+ * view that doesn't need to share state with the descent. If we add more
+ * routes later (a /token/:id detail view, for instance) we'll switch to
+ * a real router; for now a pathname check is the right cost.
+ *
+ * Atlas reacts to popstate so clicking a back/forward button between
+ * /atlas and / works without a full reload. The descent's WebSocket is
+ * NOT opened while the user is on /atlas, so the bridge doesn't allocate
+ * a session for a passive viewer.
+ */
 export function App() {
+  const [path, setPath] = useState(
+    typeof window !== 'undefined' ? window.location.pathname : '/',
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onPop = () => setPath(window.location.pathname);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  if (path.startsWith('/atlas')) return <Atlas />;
+
+  return <DescentApp />;
+}
+
+function DescentApp() {
   const phase = useSession((s) => s.phase);
   const depth = useSession((s) => s.depth);
   const agentConnected = useSession((s) => s.agentConnected);

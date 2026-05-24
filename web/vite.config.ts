@@ -26,6 +26,11 @@ export default defineConfig({
         target: 'http://localhost:8787',
         changeOrigin: true,
       },
+      // Atlas page data — full minted-token scan, cached server-side.
+      '/collection': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+      },
     },
   },
 });
