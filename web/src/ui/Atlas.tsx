@@ -189,7 +189,7 @@ export function Atlas() {
   const archetypeCounts = useMemo(() => {
     const counts: Record<Archetype, number> = {
       Totem: 0, Cipher: 0, Sediment: 0, Matrix: 0,
-      Sigil: 0, Halo: 0, Constellation: 0, Drift: 0,
+      Sigil: 0, Halo: 0, Constellation: 0, Veil: 0, Weave: 0, Drift: 0,
     };
     for (const r of ranked) counts[r.archetype]++;
     return counts;
