@@ -434,12 +434,15 @@ export async function renderOgPng(input: AtlasTokenMeta): Promise<Buffer> {
 // in env when that happens; mismatched files in the cache dir are ignored.
 // ---------------------------------------------------------------------------
 
-// Bump when the renderer layout changes. v2 = archetype moved from the
-// bottom-left into the top title stack, trait line removed (collided with
-// Twitter's video playback bar). Old v1-*.png/.mp4 files become stale and
-// are ignored — they sit on disk until the next manual cleanup, which is
-// fine given the small token count.
-const CACHE_VERSION = process.env.OG_CACHE_VERSION ?? 'v2';
+// Bump when the renderer layout changes or the archetype classifier output
+// shifts. v2 = archetype moved from the bottom-left into the top title
+// stack, trait line removed (collided with Twitter's video playback bar).
+// v3 = Drift split along the symmetry axis into Drift / Weave / Veil, so
+// previously-Drift glyphs now render under a different label and need new
+// PNG/MP4 artefacts. Old vN-*.png/.mp4 files become stale and are ignored —
+// they sit on disk until the next manual cleanup, which is fine given the
+// small token count.
+const CACHE_VERSION = process.env.OG_CACHE_VERSION ?? 'v3';
 
 function cachePath(tokenId: number): string {
   return path.join(CACHE_DIR, `${CACHE_VERSION}-${tokenId}.png`);

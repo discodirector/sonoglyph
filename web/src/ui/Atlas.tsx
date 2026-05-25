@@ -59,6 +59,8 @@ const ARCHETYPE_ORDER: Archetype[] = [
   'Sigil',
   'Halo',
   'Constellation',
+  'Veil',
+  'Weave',
   'Drift',
 ];
 

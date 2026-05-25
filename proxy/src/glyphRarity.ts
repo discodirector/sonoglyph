@@ -74,6 +74,8 @@ export type Archetype =
   | 'Sigil'
   | 'Halo'
   | 'Constellation'
+  | 'Veil'
+  | 'Weave'
   | 'Drift';
 
 export interface GlyphTraits {
@@ -330,12 +332,21 @@ export function classifyTraits(m: GlyphMetrics): GlyphTraits {
  * before the catch-all defaults so a Totem-shaped glyph isn't accidentally
  * tagged as a Constellation.
  *
- * Distribution on the calibration corpus (n=181):
+ * Distribution on the calibration corpus (n=181), pre-split:
  *   Drift 51%, Constellation 18%, Halo 8%, Sigil 7%, Totem 6%,
  *   Cipher 5%, Sediment 3%, Matrix 3%.
  *
- * Drift is intentionally a wide bucket — it's the "middle of the descent"
- * baseline. Specific archetypes peel off the visually distinct edges.
+ * That Drift bucket was too wide — half the supply under one label washes
+ * out the signal a holder gets from their archetype. The middle-density
+ * remainder is now split along the symmetry axis:
+ *   Mirrored → Veil   (axis-folded composition)
+ *   Echoed   → Weave  (repeating motif across the field)
+ *   Skewed   → Drift  (off-balance organic flow — the true catch-all)
+ * Measured post-split on the same n=181 corpus:
+ *   Weave 30%, Constellation 18%, Veil 12%, Drift 9%, Halo 8%,
+ *   Cipher 6%, Sigil 6%, Totem 6%, Sediment 3%, Matrix 2%.
+ * Symmetry already feeds the per-trait rarity score, so the split only
+ * relabels — it does not double-count rarity.
  */
 export function classifyArchetype(t: GlyphTraits): Archetype {
   // Sparse rune sitting at the top, vast emptiness below.
@@ -382,7 +393,19 @@ export function classifyArchetype(t: GlyphTraits): Archetype {
     return 'Halo';
   }
 
-  // Mid-density middle of the descent.
+  // ---- former Drift bucket, split by symmetry axis ----
+
+  // Mirrored, non-sculpture forms: a folded composition — the axis is the
+  // structure, but without the strong silhouette that would have made it
+  // a Halo.
+  if (t.symmetry === 'Mirrored') return 'Veil';
+
+  // Echoed: a motif repeats across the field without true mirror folding.
+  // This is the largest of the three split sub-buckets in practice.
+  if (t.symmetry === 'Echoed') return 'Weave';
+
+  // Skewed mid-density remainder — true Drift: off-balance, organic flow,
+  // neither mirrored nor repeating.
   return 'Drift';
 }
 
@@ -471,9 +494,15 @@ export const ARCHETYPE_DESCRIPTIONS: Record<Archetype, string> = {
   Constellation:
     'Scattered marks across the whole field with no obvious centre. Light ' +
     'density, full canvas, the eye picks its own grouping.',
+  Veil:
+    'A mid-density composition folded across an axis — mirrored, but without ' +
+    'the strong silhouette of a Halo. The fold is structural, not decorative.',
+  Weave:
+    'A repeating motif spread across the field. Echoed rather than mirrored: ' +
+    'the same gesture restated until it becomes texture.',
   Drift:
-    'The middle of the descent. Mid-density, no extreme anchor — the ' +
-    'common ground from which the rarer archetypes peel away.',
+    'The middle of the descent. Mid-density, skewed, no extreme anchor — ' +
+    'an off-balance organic flow, the true catch-all of the corpus.',
 };
 
 // ---------------------------------------------------------------------------
