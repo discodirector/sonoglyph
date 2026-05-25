@@ -769,6 +769,7 @@ function DetailModal({
           >
             <ShareOnX tokenId={token.tokenId} />
             <DownloadVideo tokenId={token.tokenId} />
+            <CopyImage tokenId={token.tokenId} />
           </div>
         )}
 
@@ -1212,6 +1213,113 @@ function DownloadVideo({ tokenId }: { tokenId: number }) {
       {label}
       {status === 'idle' && (
         <span style={{ fontSize: 12, letterSpacing: 0 }}>↓</span>
+      )}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CopyImage — write the OG card PNG directly into the system clipboard so
+// the viewer can paste it into a tweet / Discord / messenger without going
+// through download + upload. Same source asset as the share card (/og/:id.png),
+// 1200×630 with archetype + branding burnt in.
+//
+// Why ClipboardItem with a Promise<Blob>, not `await fetch` first:
+// Safari (both desktop and iOS) requires that `navigator.clipboard.write`
+// is called within the user-activation tick. If we await the network round
+// trip ourselves, by the time we reach `clipboard.write` the activation
+// has expired and the write silently fails. The ClipboardItem constructor
+// accepts a Promise per MIME type and Safari treats the eventual resolution
+// as still inside the original gesture — this is the only path that works
+// uniformly across Chrome/Safari/Edge.
+//
+// Fallback: if Clipboard API or the image/png MIME type is unsupported
+// (Firefox < 127, some WebViews, non-HTTPS preview environments), we open
+// the PNG in a new tab so the user can right-click → Copy Image or
+// long-press → Save. Better than a dead button with no signal.
+// ---------------------------------------------------------------------------
+
+function CopyImage({ tokenId }: { tokenId: number }) {
+  const [status, setStatus] = useState<
+    'idle' | 'copying' | 'copied' | 'fallback' | 'error'
+  >('idle');
+
+  const onClick = async () => {
+    if (status === 'copying') return;
+    setStatus('copying');
+    try {
+      if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+        throw new Error('clipboard-api-unavailable');
+      }
+      const item = new ClipboardItem({
+        'image/png': fetch(`/og/${tokenId}.png`).then((r) => {
+          if (!r.ok) throw new Error(`og fetch ${r.status}`);
+          return r.blob();
+        }),
+      });
+      await navigator.clipboard.write([item]);
+      setStatus('copied');
+      setTimeout(() => setStatus('idle'), 1800);
+    } catch (err) {
+      console.warn('[atlas] image copy failed, opening fallback tab:', err);
+      try {
+        window.open(`/og/${tokenId}.png`, '_blank', 'noopener');
+        setStatus('fallback');
+        setTimeout(() => setStatus('idle'), 2600);
+      } catch {
+        setStatus('error');
+        setTimeout(() => setStatus('idle'), 4000);
+      }
+    }
+  };
+
+  const label =
+    status === 'copying'
+      ? 'COPYING…'
+      : status === 'copied'
+      ? 'COPIED ✓'
+      : status === 'fallback'
+      ? 'OPENED — SAVE IMAGE ↗'
+      : status === 'error'
+      ? 'FAILED — RETRY'
+      : 'COPY IMAGE';
+
+  const accent = status === 'error' ? '#c97a5b' : '#c9885b';
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={status === 'copying'}
+      style={{
+        flex: 1,
+        minWidth: 180,
+        padding: '12px 16px',
+        background: 'transparent',
+        color: accent,
+        border: `1px solid ${accent}`,
+        fontFamily: 'ui-monospace, Menlo, monospace',
+        fontSize: 11,
+        letterSpacing: '0.28em',
+        cursor: status === 'copying' ? 'wait' : 'pointer',
+        opacity: status === 'copying' ? 0.7 : 1,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+      }}
+      onMouseEnter={(e) => {
+        if (status === 'idle') {
+          e.currentTarget.style.background = 'rgba(201,136,91,0.1)';
+        }
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'transparent';
+      }}
+    >
+      {label}
+      {status === 'idle' && (
+        <span style={{ fontSize: 12, letterSpacing: 0 }}>⧉</span>
       )}
     </button>
   );
