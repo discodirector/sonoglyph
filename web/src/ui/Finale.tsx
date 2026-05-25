@@ -59,21 +59,34 @@ export function Finale() {
       style={{
         position: 'fixed',
         inset: 0,
+        // Outer is the scroll container — overflow lives here, NOT on the
+        // flex column. The classic flexbox-overflow gotcha: a column with
+        // `justify-content: center` + `overflow: auto` will push the top of
+        // the content above scrollTop=0 when content exceeds the viewport,
+        // making the glyph unreachable on short screens. We split the
+        // concerns: outer scrolls, inner wrapper uses `margin: auto` so it
+        // centers when it fits and sticks to flow when it doesn't — so the
+        // top of the glyph is always scrollable into view.
+        overflowY: 'auto',
         display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 24,
-        padding: '40px 24px',
         pointerEvents: 'auto',
         color: '#d8d4cf',
         background:
           'linear-gradient(to bottom, rgba(5,5,7,0.4) 0%, rgba(5,5,7,0.92) 100%)',
-        // The mint panel can grow when error text wraps, so let the column
-        // scroll on tiny viewports rather than clipping the button.
-        overflowY: 'auto',
       }}
     >
+      <div
+        style={{
+          margin: 'auto',
+          padding: '40px 24px',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 24,
+          width: '100%',
+          maxWidth: 720,
+        }}
+      >
       <div
         style={{
           fontSize: 11,
@@ -157,6 +170,7 @@ export function Finale() {
       {/* Mint panel only mounts once we have a pinned CID — the bridge needs
           it to fill audioCid in the on-chain Descent struct. */}
       {audioPinStatus === 'pinned' && <MintPanel />}
+      </div>
     </div>
   );
 }
@@ -753,18 +767,26 @@ function RarityBadge({ glyph }: { glyph: string }) {
         <TraitGrid analysis={analysis} />
       </div>
 
-      <a
-        href={mintTokenId ? `/atlas/${mintTokenId}` : '/atlas'}
-        style={{
-          fontSize: 9,
-          letterSpacing: '0.3em',
-          color: '#6a6660',
-          textDecoration: 'none',
-          marginTop: 4,
-        }}
-      >
-        {mintTokenId ? 'SEE IT IN THE ATLAS →' : 'SEE THE ATLAS →'}
-      </a>
+      {/* Atlas link gated until mint completes. Before mint a click would
+          unmount Finale and reset the session — the in-progress Descent
+          (pinned audio, journal, glyph) would be lost because nothing on
+          the bridge can restore it without a fresh chain mint. After mint
+          the token is on-chain, the link is safe, and it's the entry point
+          to Share/Download/Copy-Link in Atlas. */}
+      {mintTokenId && (
+        <a
+          href={`/atlas/${mintTokenId}`}
+          style={{
+            fontSize: 9,
+            letterSpacing: '0.3em',
+            color: '#6a6660',
+            textDecoration: 'none',
+            marginTop: 4,
+          }}
+        >
+          SEE IT IN THE ATLAS →
+        </a>
+      )}
     </div>
   );
 }
