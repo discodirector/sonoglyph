@@ -67,7 +67,7 @@ export async function generateFinalArtifact(
 
     const scored = glyphCandidates.map((raw) => {
       const grid = extractGlyph(raw);
-      return { grid, score: scoreGlyph(grid) };
+      return { raw, grid, score: scoreGlyph(grid) };
     });
     scored.sort((a, b) => b.score - a.score);
     console.log(
@@ -75,9 +75,66 @@ export async function generateFinalArtifact(
         `(picked top: ${scored[0].score.toFixed(2)})`,
     );
 
+    // Failure-of-Kimi guard. Empty / near-empty grids slip through when
+    // Kimi answers with prose, refuses, or returns a block extractGlyph
+    // can't parse — extractGlyph then pads to 16×32 spaces and scoreGlyph
+    // assigns 0 across the board. This produced token #184: a structurally
+    // valid but content-empty glyph that ended up on-chain immutably.
+    //
+    // Two-tier defence:
+    //   tier 1 — if top candidate is below the floor, do ONE retry at low
+    //            temperature (T=0.3). Conservative sampling is the failure
+    //            mode opposite of high-T candidates that produced nothing
+    //            parseable, so it usually rescues the generation while
+    //            keeping source=kimi.
+    //   tier 2 — if the retry is still below the floor, fall back to the
+    //            offline deterministic generator. Better a procedurally
+    //            generated glyph than an empty one.
+    //
+    // Floor: score >= 1.0 AND non-space content >= 16 cells. 16 is one row
+    // half-filled — anything lower is unambiguously not a composition.
+    // scoreGlyph of a plausible Whisper-density glyph is in the 4-10 range
+    // empirically, so 1.0 is a loose floor that only catches "broken".
+    const MIN_SCORE = 1.0;
+    const MIN_NONSPACE = 16;
+    const passes = (g: { score: number; grid: string }) =>
+      g.score >= MIN_SCORE && nonSpaceCount(g.grid) >= MIN_NONSPACE;
+
+    let chosen = scored[0];
+    if (!passes(chosen)) {
+      console.warn(
+        `[kimi] top candidate failed quality floor ` +
+          `(score=${chosen.score.toFixed(2)}, ` +
+          `non-space=${nonSpaceCount(chosen.grid)}). ` +
+          `raw[0..240]=${JSON.stringify(chosen.raw.slice(0, 240))}. retrying T=0.3...`,
+      );
+      try {
+        const retryRaw = await callKimi(apiKey, gPrompt, 1000, 0.3);
+        const retryGrid = extractGlyph(retryRaw);
+        const retryScore = scoreGlyph(retryGrid);
+        const retryEntry = { raw: retryRaw, grid: retryGrid, score: retryScore };
+        console.log(
+          `[kimi] retry score=${retryScore.toFixed(2)} ` +
+            `non-space=${nonSpaceCount(retryGrid)}`,
+        );
+        if (passes(retryEntry)) {
+          chosen = retryEntry;
+        } else {
+          console.warn(
+            `[kimi] retry also below floor — falling back to offline generator. ` +
+              `retry raw[0..240]=${JSON.stringify(retryRaw.slice(0, 240))}`,
+          );
+          return fallback(layers);
+        }
+      } catch (retryErr) {
+        console.warn('[kimi] retry call failed, falling back', retryErr);
+        return fallback(layers);
+      }
+    }
+
     return {
       journal: clampJournal(stripFences(journal).trim()),
-      glyph: scored[0].grid,
+      glyph: chosen.grid,
       generatedBy: 'kimi',
     };
   } catch (err) {
@@ -391,6 +448,22 @@ function buildBandPalettes(layers: PlacedLayer[]): string {
 // weight (×2.0) to overcome a "perfectly textured block" that's high on
 // entropy/uniqueness but flat on shape.
 // ---------------------------------------------------------------------------
+/**
+ * Cheap pre-check used as a quality floor alongside scoreGlyph. A grid
+ * with zero non-space cells is the failure shape we hit on token #184 —
+ * extractGlyph padded an unparseable Kimi response to 16×32 spaces and
+ * every scoreGlyph metric collapsed to 0. Counting raw content cells
+ * catches that case unambiguously even if some future scoreGlyph tweak
+ * starts giving empty grids a non-zero score for whatever reason.
+ */
+function nonSpaceCount(grid: string): number {
+  let n = 0;
+  for (const ch of grid) {
+    if (ch !== ' ' && ch !== '\n') n += 1;
+  }
+  return n;
+}
+
 function scoreGlyph(grid: string): number {
   const rows = grid.split('\n');
   const trimmedNoSpace = rows.map((r) => r.replace(/\s+/g, ''));
