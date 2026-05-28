@@ -433,6 +433,34 @@ function computeRarityScore(traits: GlyphTraits): number {
   return score;
 }
 
+/**
+ * Minimum non-space cells for a glyph to be treated as a real composition.
+ *
+ * The rarity score rewards extreme-LOW buckets — Whisper density, Block
+ * silhouette, Monolith lexicon all carry high 1/freq weight. An empty or
+ * near-empty grid lands in all three at once and scores near the top of
+ * the collection, which is exactly backwards: it's not an ultra-minimalist
+ * statement, it's a malformed artifact. Token #184 is the live example —
+ * Kimi returned an unparseable response, extractGlyph padded the grid to
+ * all spaces, and the empty result ranked #2 of 185 by rarity.
+ *
+ * Threshold rationale: the sparsest LEGITIMATE glyph in the calibration
+ * corpus is token #10 (a Whisper Totem) at 16 non-space cells. 8 leaves a
+ * 2x margin below that, so we only floor genuinely empty / near-empty
+ * grids and never demote a real sparse composition.
+ */
+const MIN_CONTENT_CELLS = 8;
+
+/**
+ * A glyph carrying fewer than {@link MIN_CONTENT_CELLS} marks is a
+ * malformed artifact rather than a rare composition. `metrics.density` is
+ * the fraction of the grid filled, so density × grid-size = non-space cell
+ * count.
+ */
+export function isDegenerate(metrics: GlyphMetrics): boolean {
+  return metrics.density * ROWS * COLS < MIN_CONTENT_CELLS;
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -446,7 +474,10 @@ export function analyzeGlyph(glyph: string): GlyphAnalysis {
   const metrics = computeMetrics(glyph);
   const traits = classifyTraits(metrics);
   const archetype = classifyArchetype(traits);
-  const rarityScore = computeRarityScore(traits);
+  // Degenerate (empty / near-empty) glyphs are floored to 0 so they sort
+  // to the bottom of the collection instead of masquerading as ultra-rare.
+  // We keep the archetype/trait labels intact — only the score is zeroed.
+  const rarityScore = isDegenerate(metrics) ? 0 : computeRarityScore(traits);
 
   const traitPercents: Record<keyof GlyphTraits, number> = {
     density: freqPercent('density', traits.density) * 100,
