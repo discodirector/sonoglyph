@@ -135,21 +135,26 @@ export interface GlyphAnalysis {
  * `sampleSize` to get probabilities for the rarity score.
  */
 export const CALIBRATION = {
-  calibratedAt: '2026-05-23',
-  sampleSize: 181,
+  // Final calibration snapshot — taken when the experiment was concluded
+  // at 186 mints (out of MAX_SUPPLY=250). The descent series was closed
+  // before reaching cap, and this snapshot is frozen for the lifetime of
+  // the collection. Do not re-run recalibrate-rarity.mjs against this
+  // file — holder bucket labels are now stable forever.
+  calibratedAt: '2026-06-30',
+  sampleSize: 186,
   contractMaxSupply: 250,
   thresholds: {
     density: [0.11, 0.18, 0.30, 0.48],
-    silhouette: [2.24, 4.57, 8.75, 14.37],
-    centroidY: [2.38, 5.50, 7.62, 8.63],
+    silhouette: [2.06, 4.51, 8.53, 14.37],
+    centroidY: [2.38, 5.53, 7.62, 8.62],
     symmetry: [0.24, 0.45],
   },
   frequencies: {
-    density: { Whisper: 16, Sparse: 38, Balanced: 70, Dense: 37, Saturated: 20 },
-    form: { Block: 18, Spine: 36, Drift: 71, Sculpture: 36, Apparition: 20 },
-    anchor: { Crown: 18, Rising: 36, Centered: 71, Diving: 37, Floor: 19 },
-    lexicon: { Monolith: 9, Spare: 15, Rich: 77, Polyglot: 80 },
-    symmetry: { Skewed: 54, Echoed: 71, Mirrored: 56 },
+    density: { Whisper: 17, Sparse: 38, Balanced: 73, Dense: 37, Saturated: 21 },
+    form: { Block: 18, Spine: 37, Drift: 74, Sculpture: 37, Apparition: 20 },
+    anchor: { Crown: 18, Rising: 37, Centered: 74, Diving: 37, Floor: 20 },
+    lexicon: { Monolith: 10, Spare: 17, Rich: 78, Polyglot: 81 },
+    symmetry: { Skewed: 54, Echoed: 75, Mirrored: 57 },
   },
 } as const;
 
