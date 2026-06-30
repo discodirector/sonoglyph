@@ -463,18 +463,24 @@ app.get('/video/:filename', async (c) => {
 });
 
 /**
- * Runtime feature flags surfaced to the frontend. Right now this is just
- * the share-button gate — we keep it disabled until supply hits 250 and
- * the rarity calibration is frozen, because pre-freeze rank values can
- * shift between mints (and a tweeted card showing "RANK 7" would lie
- * after the next mint reshuffles).
+ * Runtime feature flags surfaced to the frontend.
+ *   - shareEnabled: gates the share-on-X / download-video / copy-image row
+ *     in the Atlas detail modal. Off until the rarity calibration is frozen
+ *     so a tweeted "RANK 7" doesn't lie after the next mint reshuffles.
+ *   - mintClosed: declares the experiment concluded. Frontend Intro and
+ *     Finale switch to "Experiment concluded" / atlas-only states, and the
+ *     bridge itself short-circuits /mint with 410. Used to close the series
+ *     before contract MAX_SUPPLY (250) — the contract has no pause primitive,
+ *     so closure lives entirely at this layer + the fact that the bridge
+ *     holds the only owner key with mintDescent rights.
  *
- * Toggle by setting SHARE_ENABLED=true in .env on the VPS; the frontend
- * polls this once on Atlas mount.
+ * Toggle either via .env on the VPS (SHARE_ENABLED, MINT_CLOSED) and restart
+ * the bridge. Frontend polls /config once on each relevant page mount.
  */
 app.get('/config', (c) => {
   const shareEnabled = process.env.SHARE_ENABLED === 'true';
-  return c.json({ shareEnabled });
+  const mintClosed = process.env.MINT_CLOSED === 'true';
+  return c.json({ shareEnabled, mintClosed });
 });
 
 // -----------------------------------------------------------------------------
@@ -564,6 +570,21 @@ app.post('/pin/audio', async (c) => {
 // instead of producing a duplicate token.
 // -----------------------------------------------------------------------------
 app.post('/mint', async (c) => {
+  // Experiment-concluded gate. We check BEFORE the session lookup so the
+  // response is consistent regardless of whether the session is known —
+  // an opaque "closed" signal rather than a stack of "unknown session" then
+  // "minting closed" depending on cold-start timing. 410 Gone is the right
+  // status: the resource permanently no longer accepts the operation, and
+  // crawlers / link-previews treat it as authoritative.
+  if (process.env.MINT_CLOSED === 'true') {
+    return c.json(
+      {
+        error:
+          'The Sonoglyph descent series has been concluded. No further mints are accepted.',
+      },
+      410,
+    );
+  }
   const code = c.req.query('code');
   if (!code) {
     return c.json({ error: 'missing ?code= query parameter' }, 400);

@@ -223,25 +223,37 @@ export async function fetchCollection(): Promise<CollectionResponse> {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime feature flags surfaced by the bridge. Right now this is just the
-// share-button gate (we keep it disabled until supply hits 250 and the
-// rarity calibration is frozen). Defaults to {shareEnabled:false} on any
-// network failure so a momentarily-down bridge never accidentally exposes
-// a gated UI to viewers.
+// Runtime feature flags surfaced by the bridge.
+//   - shareEnabled: share-button gate; flipped on when the rarity calibration
+//     is frozen so tweeted cards don't lie after the next mint reshuffles.
+//   - mintClosed: experiment-concluded gate; when true the bridge rejects
+//     /mint with 410 and the frontend shows "Experiment concluded" in Intro
+//     and Finale instead of the mint flow. Used when we close the descent
+//     series before the on-chain MAX_SUPPLY of 250 (contract is immutable,
+//     so closure happens at the bridge + UI layer).
+//
+// Defaults on network failure are conservative: shareEnabled=false (gated UI
+// stays hidden) and mintClosed=false (we don't accidentally lock users out
+// of mint when the config endpoint is briefly unreachable — the bridge
+// itself still rejects the mint if the flag is on the VPS).
 // ---------------------------------------------------------------------------
 
 export interface RuntimeConfig {
   shareEnabled: boolean;
+  mintClosed: boolean;
 }
 
 export async function fetchConfig(): Promise<RuntimeConfig> {
   try {
     const res = await fetch('/config');
-    if (!res.ok) return { shareEnabled: false };
+    if (!res.ok) return { shareEnabled: false, mintClosed: false };
     const j = (await res.json()) as Partial<RuntimeConfig>;
-    return { shareEnabled: Boolean(j.shareEnabled) };
+    return {
+      shareEnabled: Boolean(j.shareEnabled),
+      mintClosed: Boolean(j.mintClosed),
+    };
   } catch {
-    return { shareEnabled: false };
+    return { shareEnabled: false, mintClosed: false };
   }
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { isAddress } from 'viem';
 import { useSession } from '../state/useSession';
-import { mintDescent, fetchSupply, fetchCollection } from '../net/client';
+import { mintDescent, fetchSupply, fetchCollection, fetchConfig } from '../net/client';
 import {
   ARCHETYPE_DESCRIPTIONS,
   analyzeGlyph,
@@ -36,10 +36,16 @@ export function Finale() {
   const audioPinError = useSession((s) => s.audioPinError);
   const setSupply = useSession((s) => s.setSupply);
 
-  // One-shot supply fetch on mount. The bridge caches for 15 s so this is
-  // cheap; we just want a snapshot the moment the player lands on Finale.
-  // Failures are silent — the UI hides the counter when supplyMinted is
-  // null, and the contract enforces the cap regardless of UI hints.
+  // mintClosed is the experiment-concluded gate. When true, the MintPanel
+  // is suppressed and replaced with a "series concluded" stub — the player
+  // still sees their descent (glyph, journal, archetype) but the on-chain
+  // mint flow is shut. Defaults to false on fetch failure so a transient
+  // /config blip doesn't accidentally lock a real mint.
+  const [mintClosed, setMintClosed] = useState(false);
+
+  // One-shot supply + config fetch on mount. /supply caches 15s on the
+  // bridge; /config is trivial. Failures are silent — supply counter
+  // hides on null, mintClosed defaults closed-safe.
   useEffect(() => {
     let cancelled = false;
     void fetchSupply()
@@ -49,6 +55,9 @@ export function Finale() {
       .catch((err) => {
         console.warn('[finale] supply fetch failed', err);
       });
+    void fetchConfig().then((cfg) => {
+      if (!cancelled) setMintClosed(cfg.mintClosed);
+    });
     return () => {
       cancelled = true;
     };
@@ -168,8 +177,12 @@ export function Finale() {
       />
 
       {/* Mint panel only mounts once we have a pinned CID — the bridge needs
-          it to fill audioCid in the on-chain Descent struct. */}
-      {audioPinStatus === 'pinned' && <MintPanel />}
+          it to fill audioCid in the on-chain Descent struct. When the
+          experiment has been concluded (mintClosed flag), we suppress the
+          panel entirely and show a closing-statement stub so the player
+          still has visual closure without being teased with a dead button. */}
+      {audioPinStatus === 'pinned' &&
+        (mintClosed ? <ExperimentConcludedPanel /> : <MintPanel />)}
       </div>
     </div>
   );
@@ -233,6 +246,78 @@ function PinStatus({
         style={{ color: '#c9885b', textDecoration: 'none' }}
       >
         {short} ↗
+      </a>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// ExperimentConcludedPanel — replaces MintPanel when the mintClosed flag
+// is on. The descent still happens, the artifact is still composed and
+// pinned to IPFS, but the on-chain mint path is shut. We keep the visual
+// tone of the surrounding finale (low-contrast caption + brand-accent line)
+// so the closure reads as a deliberate end-state, not a missing button.
+// -----------------------------------------------------------------------------
+
+function ExperimentConcludedPanel() {
+  return (
+    <div
+      style={{
+        marginTop: 4,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 10,
+        maxWidth: 520,
+        width: '100%',
+        fontFamily: 'ui-monospace, Menlo, monospace',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: '0.3em',
+          color: '#6a6660',
+        }}
+      >
+        EXPERIMENT CONCLUDED
+      </div>
+      <div
+        style={{
+          fontSize: 13,
+          letterSpacing: '0.18em',
+          color: '#c9885b',
+          textTransform: 'uppercase',
+          marginTop: 6,
+        }}
+      >
+        The descent series is closed
+      </div>
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: '0.05em',
+          color: '#a09d99',
+          textAlign: 'center',
+          maxWidth: 460,
+          lineHeight: 1.6,
+        }}
+      >
+        Your descent was composed and preserved on IPFS, but the on-chain
+        edition is no longer accepting mints. Browse the atlas to see the
+        glyphs that made it onto the chain.
+      </div>
+      <a
+        href="/atlas"
+        style={{
+          fontSize: 9,
+          letterSpacing: '0.3em',
+          color: '#6a6660',
+          textDecoration: 'none',
+          marginTop: 12,
+        }}
+      >
+        SEE THE ATLAS →
       </a>
     </div>
   );

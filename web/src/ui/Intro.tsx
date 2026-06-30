@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSession } from '../state/useSession';
 import { HERMES_FIX_PROMPT } from './hermesFixPrompt';
-import { requestSharedAgent } from '../net/client';
+import { requestSharedAgent, fetchConfig } from '../net/client';
 
 /**
  * Intro / pairing screen.
@@ -49,6 +49,22 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
   useEffect(() => {
     if (sharedAgentEngaged && topTab !== 'shared') setTopTab('shared');
   }, [sharedAgentEngaged, topTab]);
+
+  // Experiment-concluded gate. When true the bridge has stopped accepting
+  // /mint and there's no point in walking a fresh visitor through the
+  // pairing setup or shared-agent spawn — both paths end at a dead mint
+  // panel. We replace the tab row with a closing-statement hero that
+  // points to the atlas. Fetched once on mount; closed-safe default.
+  const [mintClosed, setMintClosed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchConfig().then((cfg) => {
+      if (!cancelled) setMintClosed(cfg.mintClosed);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Two-layer container so the intro can grow taller than the viewport
   // (e.g. the troubleshooter is expanded with the long Hermes-patch
@@ -138,12 +154,19 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
         you compose the cave.
       </p>
 
-      {/* While the bridge mints the session code we can't render either
-          tab's contents (PairingPanel needs the printed command, the
-          shared path needs a code to POST to /agents/spawn). Show a
-          single line of status copy until `pairing` resolves; the table
-          of CTAs reveals itself below it. */}
-      {!pairing ? (
+      {/* Closure mode pre-empts everything below. Once the experiment is
+          concluded, the player should land on a clear end-state, not on a
+          pairing flow that would terminate at a dead mint panel. We keep
+          the title block above so the page still reads as Sonoglyph rather
+          than a blank closure page. */}
+      {mintClosed ? (
+        <ConcludedHero />
+      ) : !pairing ? (
+        /* While the bridge mints the session code we can't render either
+           tab's contents (PairingPanel needs the printed command, the
+           shared path needs a code to POST to /agents/spawn). Show a
+           single line of status copy until `pairing` resolves; the table
+           of CTAs reveals itself below it. */
         <p style={{ color: '#6a6660', fontSize: 12, letterSpacing: '0.2em' }}>
           {proxyOk === false ? 'BRIDGE OFFLINE' : 'OPENING BRIDGE…'}
         </p>
@@ -214,6 +237,92 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
         </>
       )}
       </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// ConcludedHero — shown in place of the tab row when the experiment is
+// closed (mintClosed flag from /config). The title block above remains so
+// the page still reads as Sonoglyph; this is the body slot below it. The
+// only CTA is the atlas — there's no descent path that ends anywhere
+// useful while mint is shut, so we don't tease one. Tone matches the
+// PairingPanel status copy (muted caption + brand-accent headline) so the
+// closure feels like an end-state of the same site, not a separate page.
+// -----------------------------------------------------------------------------
+function ConcludedHero() {
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 14,
+        maxWidth: 560,
+        fontFamily: 'ui-monospace, Menlo, monospace',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: '0.3em',
+          color: '#6a6660',
+        }}
+      >
+        EXPERIMENT CONCLUDED
+      </div>
+      <div
+        style={{
+          fontSize: 15,
+          letterSpacing: '0.18em',
+          color: '#c9885b',
+          textTransform: 'uppercase',
+        }}
+      >
+        The descent series is closed
+      </div>
+      <p
+        style={{
+          margin: 0,
+          fontSize: 12,
+          lineHeight: 1.7,
+          letterSpacing: '0.04em',
+          color: '#a09d99',
+          textAlign: 'center',
+          fontFamily: 'system-ui, sans-serif',
+          fontStyle: 'italic',
+          maxWidth: 520,
+        }}
+      >
+        Thank you to everyone who composed a glyph with Hermes. The on-chain
+        edition is no longer accepting mints; the collection is preserved in
+        the atlas.
+      </p>
+      <a
+        href="/atlas"
+        style={{
+          marginTop: 8,
+          padding: '12px 28px',
+          background: 'transparent',
+          color: '#c9885b',
+          border: '1px solid #c9885b',
+          letterSpacing: '0.3em',
+          fontSize: 12,
+          textTransform: 'uppercase',
+          textDecoration: 'none',
+          fontFamily: 'inherit',
+          transition: 'background 200ms',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = 'rgba(201,136,91,0.1)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = 'transparent';
+        }}
+      >
+        See the atlas →
+      </a>
     </div>
   );
 }
