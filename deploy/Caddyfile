@@ -159,3 +159,9 @@ docs.sonoglyph.xyz {
 		level INFO
 	}
 }
+
+# Sites belonging to other projects (arcman, frameloop) live in their own
+# files here. This file is overwritten wholesale by sonoglyph's
+# deploy/redeploy.sh, so anything defined directly in it would be lost on
+# every deploy — the import keeps those sites outside the blast radius.
+import /etc/caddy/sites.d/*.caddy
