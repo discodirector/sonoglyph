@@ -38,6 +38,16 @@ const JOURNAL_MAX_CHARS = 720;
 export async function generateFinalArtifact(
   layers: PlacedLayer[],
 ): Promise<FinalArtifact> {
+  // Play-mode shortcut. When the experiment has been concluded (MINT_CLOSED
+  // flag), sessions are ephemeral practice runs — nothing is pinned to IPFS
+  // and nothing goes on-chain. Paying $ per Kimi call for a throwaway
+  // artifact isn't worth it, and the offline generator produces a real
+  // journal + glyph deterministically from the layer sequence, which is
+  // exactly the same thing we already fall back to on Kimi errors. So we
+  // route play-mode straight to fallback and skip the paid path entirely.
+  if (process.env.MINT_CLOSED === 'true') {
+    return fallback(layers);
+  }
   const apiKey = process.env.KIMI_API_KEY;
   if (!apiKey) {
     console.warn('[kimi] KIMI_API_KEY not set — using fallback artifact');

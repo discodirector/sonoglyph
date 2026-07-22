@@ -19,7 +19,7 @@ import {
   stopAllPads,
   stopRecording,
 } from './audio/engine';
-import { openBridge, pinAudio, type BridgeConnection } from './net/client';
+import { openBridge, pinAudio, fetchConfig, type BridgeConnection } from './net/client';
 
 /**
  * Sonoglyph root — Day 5.
@@ -94,6 +94,21 @@ function DescentApp() {
   // it's purely a presentation pause — the server doesn't care about
   // this step and shouldn't have to.
   const [showOnboarding, setShowOnboarding] = useState(false);
+  // Practice-mode gate. When the bridge announces mintClosed we skip the
+  // IPFS pin entirely — the session is ephemeral, the blob stays local for
+  // the Finale in-page player and disappears when the tab closes. Fetched
+  // once on mount; closed-safe default so a transient /config blip never
+  // silently drops a mint-eligible pin.
+  const [mintClosed, setMintClosed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchConfig().then((cfg) => {
+      if (!cancelled) setMintClosed(cfg.mintClosed);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // Guards against re-firing if React replays the effect (e.g. after an
   // applySnapshot that re-asserts the already-final layer count, or HMR
   // in dev). Once we've armed the outro, that's it.
@@ -203,6 +218,16 @@ function DescentApp() {
   useEffect(() => {
     if (pinTriggeredRef.current) return;
     if (!recordingBlob) return;
+    // Practice mode: no pin, no IPFS, no chain path. Blob stays local for
+    // the Finale plaер and dies with the tab. We arm the same triggered
+    // ref so this branch and the pin branch stay mutually exclusive.
+    if (mintClosed) {
+      pinTriggeredRef.current = true;
+      console.log(
+        `[practice] recording ready (${(recordingBlob.size / 1024).toFixed(1)} KiB) — pin skipped, mint closed`,
+      );
+      return;
+    }
     pinTriggeredRef.current = true;
     setAudioPinPending();
     (async () => {
@@ -221,6 +246,7 @@ function DescentApp() {
   }, [
     recordingBlob,
     pairingCode,
+    mintClosed,
     setAudioPinPending,
     setAudioPinSuccess,
     setAudioPinError,

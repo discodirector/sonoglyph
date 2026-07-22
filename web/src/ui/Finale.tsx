@@ -35,6 +35,11 @@ export function Finale() {
   const audioPinStatus = useSession((s) => s.audioPinStatus);
   const audioPinError = useSession((s) => s.audioPinError);
   const setSupply = useSession((s) => s.setSupply);
+  // Practice mode gates ExperimentConcludedPanel on the presence of the
+  // local WebM blob: the pin never runs, so audioPinStatus stays 'idle'
+  // for the entire descent's tail — we can't use pin state as a signal
+  // that the recording is ready, only the blob itself.
+  const recordingBlob = useSession((s) => s.recordingBlob);
 
   // mintClosed is the experiment-concluded gate. When true, the MintPanel
   // is suppressed and replaced with a "series concluded" stub — the player
@@ -176,13 +181,17 @@ export function Finale() {
         error={audioPinError}
       />
 
-      {/* Mint panel only mounts once we have a pinned CID — the bridge needs
-          it to fill audioCid in the on-chain Descent struct. When the
-          experiment has been concluded (mintClosed flag), we suppress the
-          panel entirely and show a closing-statement stub so the player
-          still has visual closure without being teased with a dead button. */}
-      {audioPinStatus === 'pinned' &&
-        (mintClosed ? <ExperimentConcludedPanel /> : <MintPanel />)}
+      {/* Two panels, mutually exclusive:
+          - Mint mode: MintPanel mounts once we have a pinned CID, since
+            mintDescent needs audioCid to fill the on-chain Descent struct.
+          - Practice mode (mintClosed): pin is intentionally skipped, so
+            we gate on the local recordingBlob instead — that's what the
+            in-page player reads. Skipping the pin means audioPinStatus
+            stays 'idle', which is why we can't reuse the pinned-CID
+            condition here. */}
+      {mintClosed
+        ? audioPinStatus === 'idle' && recordingBlob && <ExperimentConcludedPanel />
+        : audioPinStatus === 'pinned' && <MintPanel />}
       </div>
     </div>
   );
@@ -253,13 +262,44 @@ function PinStatus({
 
 // -----------------------------------------------------------------------------
 // ExperimentConcludedPanel — replaces MintPanel when the mintClosed flag
-// is on. The descent still happens, the artifact is still composed and
-// pinned to IPFS, but the on-chain mint path is shut. We keep the visual
-// tone of the surrounding finale (low-contrast caption + brand-accent line)
-// so the closure reads as a deliberate end-state, not a missing button.
+// is on. The descent still runs end-to-end (Hermes pairing, layer placement,
+// offline artifact generation), but the on-chain mint and IPFS pin are
+// shut. This panel gives the play-mode player their finale payoff:
+//   - the descent audio, playable in-page from the local blob (never
+//     uploaded — dies with the tab)
+//   - a "descend again" button that reloads the SPA to reset the WS,
+//     the pairing code, the audio graph, and the session state in one
+//     shot (cheaper than threading a reset action through zustand)
+//   - the atlas link, kept as a low-key secondary path
+// The tone matches the surrounding finale (muted caption + brand-accent
+// headline) so play-mode still reads as an end-state of the same site.
 // -----------------------------------------------------------------------------
 
 function ExperimentConcludedPanel() {
+  const recordingBlob = useSession((s) => s.recordingBlob);
+
+  // Create a blob URL for the in-page player and revoke it on unmount so
+  // Chrome doesn't hold the WebM in memory forever. Blob identity is stable
+  // across re-renders (Zustand only swaps it when a fresh descent starts),
+  // so this useMemo runs once per descent.
+  const blobUrl = useMemo(
+    () => (recordingBlob ? URL.createObjectURL(recordingBlob) : null),
+    [recordingBlob],
+  );
+  useEffect(() => {
+    return () => {
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [blobUrl]);
+
+  const onDescendAgain = () => {
+    // Full-page reload resets everything: WS connection, session code,
+    // audio graph, Zustand store, MediaRecorder. Threading a reset action
+    // through the store would need to unwind ~15 fields plus dispose the
+    // engine — the reload path is one line and can't leak.
+    window.location.reload();
+  };
+
   return (
     <div
       style={{
@@ -280,7 +320,7 @@ function ExperimentConcludedPanel() {
           color: '#6a6660',
         }}
       >
-        EXPERIMENT CONCLUDED
+        PRACTICE MODE · EXPERIMENT CONCLUDED
       </div>
       <div
         style={{
@@ -291,7 +331,7 @@ function ExperimentConcludedPanel() {
           marginTop: 6,
         }}
       >
-        The descent series is closed
+        Descent complete
       </div>
       <div
         style={{
@@ -303,22 +343,74 @@ function ExperimentConcludedPanel() {
           lineHeight: 1.6,
         }}
       >
-        Your descent was composed and preserved on IPFS, but the on-chain
-        edition is no longer accepting mints. Browse the atlas to see the
-        glyphs that made it onto the chain.
+        Nothing was pinned or minted — the on-chain edition is closed. Your
+        recording lives only in this tab.
       </div>
-      <a
-        href="/atlas"
+
+      {blobUrl && (
+        <audio
+          controls
+          src={blobUrl}
+          style={{
+            width: '100%',
+            maxWidth: 480,
+            marginTop: 14,
+          }}
+        />
+      )}
+
+      <div
         style={{
-          fontSize: 9,
-          letterSpacing: '0.3em',
-          color: '#6a6660',
-          textDecoration: 'none',
-          marginTop: 12,
+          marginTop: 18,
+          display: 'flex',
+          gap: 10,
+          flexWrap: 'wrap',
+          justifyContent: 'center',
         }}
       >
-        SEE THE ATLAS →
-      </a>
+        <button
+          type="button"
+          onClick={onDescendAgain}
+          style={{
+            padding: '12px 24px',
+            background: 'transparent',
+            color: '#c9885b',
+            border: '1px solid #c9885b',
+            letterSpacing: '0.28em',
+            fontSize: 11,
+            textTransform: 'uppercase',
+            fontFamily: 'inherit',
+            cursor: 'pointer',
+            transition: 'background 200ms',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'rgba(201,136,91,0.1)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'transparent';
+          }}
+        >
+          Descend again ↻
+        </button>
+        <a
+          href="/atlas"
+          style={{
+            padding: '12px 24px',
+            background: 'transparent',
+            color: '#a09d99',
+            border: '1px solid #3a3a3e',
+            letterSpacing: '0.28em',
+            fontSize: 11,
+            textTransform: 'uppercase',
+            textDecoration: 'none',
+            fontFamily: 'inherit',
+            display: 'inline-flex',
+            alignItems: 'center',
+          }}
+        >
+          See the atlas →
+        </a>
+      </div>
     </div>
   );
 }

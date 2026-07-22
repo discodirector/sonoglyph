@@ -154,14 +154,14 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
         you compose the cave.
       </p>
 
-      {/* Closure mode pre-empts everything below. Once the experiment is
-          concluded, the player should land on a clear end-state, not on a
-          pairing flow that would terminate at a dead mint panel. We keep
-          the title block above so the page still reads as Sonoglyph rather
-          than a blank closure page. */}
-      {mintClosed ? (
-        <ConcludedHero />
-      ) : !pairing ? (
+      {/* Practice-mode banner. When the experiment is concluded the mint
+          path is gone, but the descent itself is still playable — pairing,
+          Hermes turns, glyph generation all still work. We surface that
+          shift up-front so the player knows what they're getting before
+          they invest in the setup, but leave the tabs / pairing below
+          untouched so the existing flow keeps working end-to-end. */}
+      {mintClosed && <PracticeModeBanner />}
+      {!pairing ? (
         /* While the bridge mints the session code we can't render either
            tab's contents (PairingPanel needs the printed command, the
            shared path needs a code to POST to /agents/spawn). Show a
@@ -242,24 +242,27 @@ export function Intro({ onBegin }: { onBegin: () => void }) {
 }
 
 // -----------------------------------------------------------------------------
-// ConcludedHero — shown in place of the tab row when the experiment is
-// closed (mintClosed flag from /config). The title block above remains so
-// the page still reads as Sonoglyph; this is the body slot below it. The
-// only CTA is the atlas — there's no descent path that ends anywhere
-// useful while mint is shut, so we don't tease one. Tone matches the
-// PairingPanel status copy (muted caption + brand-accent headline) so the
-// closure feels like an end-state of the same site, not a separate page.
+// PracticeModeBanner — shown above the pairing / tab row when the mint has
+// been closed. Sets the expectation that the descent is still playable but
+// nothing goes on-chain or gets pinned to IPFS. Muted caption + brand-accent
+// headline + short explanatory line, matching the PairingPanel status
+// rhythm; the atlas link is a small tertiary CTA so it never competes with
+// the primary "I have agent" / "I don't have agent" tabs below.
 // -----------------------------------------------------------------------------
-function ConcludedHero() {
+function PracticeModeBanner() {
   return (
     <div
       style={{
-        marginTop: 8,
+        marginTop: 4,
+        marginBottom: 8,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        gap: 14,
+        gap: 8,
         maxWidth: 560,
+        padding: '14px 20px',
+        border: '1px solid #2a2a2e',
+        background: 'rgba(255,255,255,0.02)',
         fontFamily: 'ui-monospace, Menlo, monospace',
       }}
     >
@@ -267,61 +270,38 @@ function ConcludedHero() {
         style={{
           fontSize: 10,
           letterSpacing: '0.3em',
-          color: '#6a6660',
-        }}
-      >
-        EXPERIMENT CONCLUDED
-      </div>
-      <div
-        style={{
-          fontSize: 15,
-          letterSpacing: '0.18em',
           color: '#c9885b',
-          textTransform: 'uppercase',
         }}
       >
-        The descent series is closed
+        PRACTICE MODE · EXPERIMENT CONCLUDED
       </div>
       <p
         style={{
           margin: 0,
-          fontSize: 12,
-          lineHeight: 1.7,
+          fontSize: 11,
+          lineHeight: 1.6,
           letterSpacing: '0.04em',
           color: '#a09d99',
           textAlign: 'center',
           fontFamily: 'system-ui, sans-serif',
-          fontStyle: 'italic',
-          maxWidth: 520,
+          maxWidth: 480,
         }}
       >
-        Thank you to everyone who composed a glyph with Hermes. The on-chain
-        edition is no longer accepting mints; the collection is preserved in
-        the atlas.
+        The on-chain edition is closed. Descents still play end-to-end — pair
+        with Hermes and compose one — but nothing is pinned or minted, and
+        the session ends when you close the tab.
       </p>
       <a
         href="/atlas"
         style={{
-          marginTop: 8,
-          padding: '12px 28px',
-          background: 'transparent',
-          color: '#c9885b',
-          border: '1px solid #c9885b',
+          fontSize: 9,
           letterSpacing: '0.3em',
-          fontSize: 12,
-          textTransform: 'uppercase',
+          color: '#6a6660',
           textDecoration: 'none',
-          fontFamily: 'inherit',
-          transition: 'background 200ms',
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = 'rgba(201,136,91,0.1)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = 'transparent';
+          marginTop: 2,
         }}
       >
-        See the atlas →
+        SEE THE MINTED ATLAS →
       </a>
     </div>
   );
