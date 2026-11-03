@@ -41,7 +41,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, copyFile, readFile, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdir, copyFile, readFile, readdir, writeFile, rm, symlink } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
@@ -50,12 +50,49 @@ const SPAWN_BASE_DIR = '/tmp/sonoglyph-agents';
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Hermes >= 0.22 auto-starts a detached `gateway run --idle-exit` daemon per
- * HERMES_HOME (~280 MB RSS). It is reparented to init, so our SIGTERM never
- * reaches it, and by default it idles 600s before exiting. The box is shared
- * with other projects, so we shorten the idle window via the session config.
+ * Kill every process whose HERMES_HOME is this session's home; returns their
+ * pids. Hermes >= 0.22 runs the agent inside an auto-started `gateway run`
+ * daemon (300-400 MB RSS) that is reparented to init, so SIGTERM to our child
+ * never reaches it. It also inherits the bridge's systemd INVOCATION_ID, takes
+ * itself for supervised and never idle-exits, so without this every session
+ * would leak one until the bridge restarts. No-op where /proc is absent.
  */
-const GATEWAY_IDLE_EXIT_SECONDS = 30;
+async function reapSessionProcesses(tmpHome: string): Promise<number[]> {
+  const marker = Buffer.from(`HERMES_HOME=${tmpHome}\0`);
+  let entries: string[];
+  try {
+    entries = await readdir('/proc');
+  } catch {
+    return [];
+  }
+  const pids: number[] = [];
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      if ((await readFile(`/proc/${entry}/environ`)).includes(marker)) {
+        pids.push(Number(entry));
+      }
+    } catch {
+      // Exited mid-scan or not readable — nothing to reap.
+    }
+  }
+  const signalAll = (sig: NodeJS.Signals | 0, targets: number[]) =>
+    targets.filter((pid) => {
+      try {
+        process.kill(pid, sig);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  let alive = signalAll('SIGTERM', pids);
+  for (let i = 0; i < 10 && alive.length > 0; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    alive = signalAll(0, alive);
+  }
+  signalAll('SIGKILL', alive);
+  return pids;
+}
 
 /**
  * Initial prompt handed to the spawned agent — identical to the one we
@@ -285,13 +322,6 @@ export async function spawnHermesAgent(
     max_turns: Math.max(60, existingMaxTurns),
   };
 
-  const existingGateway =
-    (userConfig.gateway as Record<string, unknown> | undefined) ?? {};
-  userConfig.gateway = {
-    ...existingGateway,
-    unmanaged_idle_exit_seconds: GATEWAY_IDLE_EXIT_SECONDS,
-  };
-
   await writeFile(
     join(tmpHome, 'config.yaml'),
     yaml.dump(userConfig, { lineWidth: 120, noRefs: true }),
@@ -335,19 +365,26 @@ export async function spawnHermesAgent(
           `[spawn ${sessionCode}] hermes exited code=${code} signal=${signal}`,
         );
         // ---- 5. Cleanup -----------------------------------------------------
-        // Async fire-and-forget — the agent dir is small (a few MB) and we
-        // don't want to block the exit handler on filesystem latency.
-        const removeSessionDir = () =>
-          rm(join(SPAWN_BASE_DIR, sessionCode), { recursive: true, force: true });
-        removeSessionDir().catch(() => {
-          // The orphaned gateway keeps writing here until its idle exit
-          // (ENOTEMPTY); retry once it has had time to go.
-          setTimeout(() => {
-            removeSessionDir().catch((err) => {
-              console.warn(`[spawn ${sessionCode}] cleanup failed:`, err);
+        // Async fire-and-forget — we don't want to block the exit handler.
+        // Reap first: the detached gateway keeps writing into the home, so
+        // removing it while that runs fails with ENOTEMPTY.
+        reapSessionProcesses(tmpHome)
+          .then((pids) => {
+            if (pids.length > 0) {
+              console.log(
+                `[spawn ${sessionCode}] reaped leftover hermes pids: ${pids.join(',')}`,
+              );
+            }
+            return rm(join(SPAWN_BASE_DIR, sessionCode), {
+              recursive: true,
+              force: true,
+              maxRetries: 3,
+              retryDelay: 500,
             });
-          }, (GATEWAY_IDLE_EXIT_SECONDS + 30) * 1000).unref();
-        });
+          })
+          .catch((err) => {
+            console.warn(`[spawn ${sessionCode}] cleanup failed:`, err);
+          });
         resolve({ code, signal });
       });
       child.once('error', (err) => {
