@@ -753,8 +753,9 @@ function SharedAgentPanel({
       ? 'A queue overlay will appear shortly with your position.'
       : status === 'active'
       ? 'The bridge has handed off to your agent. Your descent is starting…'
-      : 'Hold on a beat — this usually takes about five seconds. ' +
-        'The pairing light will turn green when your agent connects.';
+      : 'Hold on a beat — this usually takes 10–20 seconds, up to a minute ' +
+        'right after an agent update. Keep this tab open; the pairing light ' +
+        'will turn green when your agent connects.';
 
   return (
     <div

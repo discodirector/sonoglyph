@@ -2,7 +2,8 @@
  * Spawn an isolated Hermes process for one session ("shared agent" path).
  *
  * Flow:
- *   1. mkdir /tmp/sonoglyph-agents/<code>/.hermes/
+ *   1. mkdir /tmp/sonoglyph-agents/<code>/.hermes/ and symlink its
+ *      `installs/` to the shared dependency dir (see sharedInstallsPath).
  *   2. Copy global `.env` (creds) from the operator's user-level Hermes home
  *      (default /root/.hermes — bridge runs as root in systemd).
  *   3. Read operator's `config.yaml`, splice in our session-specific
@@ -40,11 +41,13 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, copyFile, readFile, writeFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, copyFile, readFile, writeFile, rm, symlink } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 
 const SPAWN_BASE_DIR = '/tmp/sonoglyph-agents';
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Initial prompt handed to the spawned agent — identical to the one we
@@ -130,6 +133,13 @@ export interface SpawnConfig {
   bridgePort: number;
   /** Optional `model.default` override. Empty → use operator's config value. */
   modelOverride: string | null;
+  /**
+   * Persistent dir every session's `<HERMES_HOME>/installs` points at.
+   * Hermes >= 0.22 builds a dependency venv per data root on first launch
+   * (20-60s), so a fresh per-session home would rebuild it on every spawn.
+   * Must be writable under the unit's sandbox (ReadWritePaths=/srv/sonoglyph).
+   */
+  sharedInstallsPath: string;
 }
 
 export interface SpawnedAgent {
@@ -148,6 +158,9 @@ export function loadSpawnConfig(): SpawnConfig {
     hermesBinPath: process.env.HERMES_BIN_PATH?.trim() || 'hermes',
     bridgePort: Number(process.env.PROXY_PORT ?? 8787),
     modelOverride: process.env.SHARED_AGENT_MODEL_OVERRIDE?.trim() || null,
+    sharedInstallsPath:
+      process.env.HERMES_SHARED_INSTALLS_PATH?.trim() ||
+      resolve(HERE, '../../../cache/hermes-installs'),
   };
 }
 
@@ -158,6 +171,10 @@ export async function spawnHermesAgent(
 ): Promise<SpawnedAgent> {
   const tmpHome = join(SPAWN_BASE_DIR, sessionCode, '.hermes');
   await mkdir(tmpHome, { recursive: true });
+  // Cleanup's rm() unlinks this symlink without following it, so the shared
+  // venv survives the session dir being deleted.
+  await mkdir(config.sharedInstallsPath, { recursive: true });
+  await symlink(config.sharedInstallsPath, join(tmpHome, 'installs'));
 
   // ---- 1. Copy operator's credential files ---------------------------------
   // Two distinct auth pathways live in HERMES_HOME, depending on the

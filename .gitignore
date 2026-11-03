@@ -41,3 +41,6 @@ captures/
 
 # claude
 .claude/settings.local.json
+
+# Runtime caches (OG cards, shared Hermes dependency venv)
+/cache/
