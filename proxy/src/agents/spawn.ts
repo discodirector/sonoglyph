@@ -50,6 +50,14 @@ const SPAWN_BASE_DIR = '/tmp/sonoglyph-agents';
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /**
+ * Hermes >= 0.22 auto-starts a detached `gateway run --idle-exit` daemon per
+ * HERMES_HOME (~280 MB RSS). It is reparented to init, so our SIGTERM never
+ * reaches it, and by default it idles 600s before exiting. The box is shared
+ * with other projects, so we shorten the idle window via the session config.
+ */
+const GATEWAY_IDLE_EXIT_SECONDS = 30;
+
+/**
  * Initial prompt handed to the spawned agent — identical to the one we
  * print in the browser for "bring your own Hermes" players (see
  * proxy/src/index.ts:hermesPrompt). Keeping the two strings the same means
@@ -277,6 +285,13 @@ export async function spawnHermesAgent(
     max_turns: Math.max(60, existingMaxTurns),
   };
 
+  const existingGateway =
+    (userConfig.gateway as Record<string, unknown> | undefined) ?? {};
+  userConfig.gateway = {
+    ...existingGateway,
+    unmanaged_idle_exit_seconds: GATEWAY_IDLE_EXIT_SECONDS,
+  };
+
   await writeFile(
     join(tmpHome, 'config.yaml'),
     yaml.dump(userConfig, { lineWidth: 120, noRefs: true }),
@@ -320,13 +335,18 @@ export async function spawnHermesAgent(
           `[spawn ${sessionCode}] hermes exited code=${code} signal=${signal}`,
         );
         // ---- 5. Cleanup -----------------------------------------------------
-        // Async fire-and-forget — the agent dir is small (~few KB) and we
+        // Async fire-and-forget — the agent dir is small (a few MB) and we
         // don't want to block the exit handler on filesystem latency.
-        rm(join(SPAWN_BASE_DIR, sessionCode), {
-          recursive: true,
-          force: true,
-        }).catch((err) => {
-          console.warn(`[spawn ${sessionCode}] cleanup failed:`, err);
+        const removeSessionDir = () =>
+          rm(join(SPAWN_BASE_DIR, sessionCode), { recursive: true, force: true });
+        removeSessionDir().catch(() => {
+          // The orphaned gateway keeps writing here until its idle exit
+          // (ENOTEMPTY); retry once it has had time to go.
+          setTimeout(() => {
+            removeSessionDir().catch((err) => {
+              console.warn(`[spawn ${sessionCode}] cleanup failed:`, err);
+            });
+          }, (GATEWAY_IDLE_EXIT_SECONDS + 30) * 1000).unref();
         });
         resolve({ code, signal });
       });
